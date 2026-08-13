@@ -1,5 +1,5 @@
 import { api } from "@/lib/api-client";
-import type { AcademicTerm, Classroom, ConflictReport, Course, Department, EntryAudit, Faculty, FreeResourceResponse, Laboratory, Page, Program, QualityMetrics, Role, Section, SolverInputSnapshot, SolverRun, StatusHistory, StudentBatch, Timetable, TimetableEntry, TimetableGrid, TimetableVersion, TokenPair, User, ValidationIssue, ValidationRun, VersionComparison, WorkingDay, WorkloadPreview } from "@/lib/types";
+import type { AcademicTerm, Classroom, ConflictReport, Course, Department, EntryAudit, Faculty, FreeResourceResponse, Laboratory, Page, Program, QualityMetrics, ReportDefinition, ReportPreview, ReportRequest, Role, Section, SolverInputSnapshot, SolverRun, StatusHistory, StudentBatch, Timetable, TimetableEntry, TimetableGrid, TimetableVersion, TokenPair, User, ValidationIssue, ValidationRun, VersionComparison, WorkingDay, WorkloadPreview } from "@/lib/types";
 
 export const authApi = {
   async login(email: string, password: string) { const form = new URLSearchParams({ username: email, password }); return (await api.post<TokenPair>("/auth/login", form, { headers: { "Content-Type": "application/x-www-form-urlencoded" } })).data },
@@ -38,6 +38,16 @@ export const validationApi = {
   async list(params: { academic_term_id?: string; scope_type?: string; status?: string; page?: number; page_size?: number }) { return (await api.get<Page<ValidationRun>>("/timetable-validation/runs", { params })).data },
   async get(id: string) { return (await api.get<ValidationRun>(`/timetable-validation/runs/${id}`)).data },
   async issues(id: string, params: { severity?: string; issue_code?: string; page?: number; page_size?: number } = {}) { return (await api.get<Page<ValidationIssue>>(`/timetable-validation/runs/${id}/issues`, { params })).data },
+};
+export const reportsApi = {
+  async definitions() { return (await api.get<ReportDefinition[]>("/reports/definitions")).data },
+  async preview(payload: ReportRequest) { return (await api.post<ReportPreview>("/reports/preview", payload)).data },
+  async export(payload: ReportRequest, format: "xlsx" | "csv" | "docx" | "pdf") {
+    const response = await api.post<Blob>("/reports/export", payload, { params: { format }, responseType: "blob" });
+    const disposition = String(response.headers["content-disposition"] ?? "");
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? `${payload.report_key}.${format}`;
+    return { blob: response.data, filename };
+  },
 };
 export const masterApi = {
   async departments() { return (await api.get<Page<Department>>("/departments", { params: { page_size: 100 } })).data },

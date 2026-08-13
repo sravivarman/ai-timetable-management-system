@@ -17,8 +17,12 @@ import { queryKeys } from "@/lib/query-keys";
 import type { ConflictReport, Faculty, FreeResourceResponse, Program, Section, SolverRun, Timetable, TimetableGrid, TimetableVersion, ValidationRun, WorkloadPreview } from "@/lib/types";
 import { solverRunLabel, stripIdentifierFields, timetableVersionLabel, validationRunLabel } from "@/lib/readable-labels";
 import { sectionLabel, sectionTerm } from "@/lib/section-labels";
+import { AdministrativeReportBuilder } from "@/components/administrative-report-builder";
 
 const definitions = [
+  ["administrative-faculty_master", "Faculty Master"], ["administrative-course_offerings", "Course Offerings"],
+  ["administrative-theory_faculty_allocations", "Theory Faculty Allocations"], ["administrative-activity_faculty_allocations", "Activity Faculty Allocations"],
+  ["administrative-section_course_faculty", "Section-wise Course & Faculty Allocation"], ["administrative-faculty_workload", "Faculty Workload"],
   ["faculty-workload", "Faculty workload"], ["faculty-timetable", "Faculty timetable"], ["section-timetable", "Section timetable"],
   ["classroom-utilization", "Classroom utilization"], ["laboratory-utilization", "Laboratory utilization"], ["batch-timetable", "Batch timetable"],
   ["free-faculty", "Free faculty"], ["free-classrooms", "Free classrooms"], ["free-laboratories", "Free laboratories"],
@@ -31,6 +35,13 @@ const viewMap: Partial<Record<ReportType, ViewType>> = { "section-timetable": "s
 export default function ReportsPage() { return <Suspense fallback={<LoadingState />}><Reports /></Suspense>; }
 
 function Reports() {
+  const params = useSearchParams();
+  const selected = params.get("report") ?? "section-timetable";
+  if (selected.startsWith("administrative-")) return <AdministrativeReportBuilder initialReportKey={selected.slice("administrative-".length)} />;
+  return <OperationalReports />;
+}
+
+function OperationalReports() {
   const params = useSearchParams(); const router = useRouter(); const defaulted = useRef(new Set<string>());
   const report = (definitions.some(([value]) => value === params.get("report")) ? params.get("report") : "section-timetable") as ReportType;
   const academicTermId = params.get("academic_term_id") ?? ""; const timetableId = params.get("timetable_id") ?? ""; const versionId = params.get("version_id") ?? ""; const sectionId = params.get("section_id") ?? ""; const resourceId = params.get("resource_id") ?? ""; const dayId = params.get("working_day_id") ?? ""; const period = Number(params.get("period") ?? 1);

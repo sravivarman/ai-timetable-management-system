@@ -35,6 +35,10 @@ uvicorn app.main:app --reload
 
 Open `http://127.0.0.1:8000/` for service information or `http://127.0.0.1:8000/docs` for the API documentation.
 
+## Administrative reports
+
+The protected frontend Reports workspace includes six configurable administrative reports with shared filters, selectable/reorderable columns, independent multi-field sorting, preview, and Excel/CSV/Word/PDF downloads. See [docs/reports.md](docs/reports.md) for the report registry, API, export behavior, and the distinction from Master Data CSV files.
+
 Health endpoints are available at:
 
 - `/api/v1/health` and `/api/v1/health/live`: process liveness; safe for container liveness probes.

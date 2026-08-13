@@ -1,0 +1,138 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { ArrowDown, ArrowUp, Download, Eye, Plus, RotateCcw, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SearchableSelect, type SelectOption } from "@/components/searchable-select";
+import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from "@/components/ui";
+import { listAcademicTerms, masterApi, reportsApi } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-client";
+import { queryKeys } from "@/lib/query-keys";
+import { sectionLabel, sectionTerm } from "@/lib/section-labels";
+import type { ReportDefinition, ReportRequest, ReportSort } from "@/lib/types";
+import { useToast } from "@/providers/toast-provider";
+
+const PREFIX = "administrative-";
+
+export function AdministrativeReportBuilder({ initialReportKey }: { initialReportKey: string }) {
+  const router = useRouter();
+  const { notify } = useToast();
+  const definitions = useQuery({ queryKey: queryKeys.reportDefinitions, queryFn: reportsApi.definitions, retry: false });
+  const [reportKey, setReportKey] = useState(initialReportKey);
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [columns, setColumns] = useState<string[]>([]);
+  const [sortFields, setSortFields] = useState<ReportSort[]>([]);
+  const [page, setPage] = useState(1);
+  const configured = useRef("");
+  const definition = definitions.data?.find((item) => item.key === reportKey);
+
+  useEffect(() => setReportKey(initialReportKey), [initialReportKey]);
+  useEffect(() => {
+    if (!definition || configured.current === definition.key) return;
+    configured.current = definition.key;
+    setColumns(definition.default_columns);
+    setSortFields(definition.default_sort);
+    setFilters({});
+    setPage(1);
+  }, [definition]);
+
+  const terms = useQuery({ queryKey: queryKeys.academicTerms, queryFn: listAcademicTerms, retry: false });
+  const departments = useQuery({ queryKey: queryKeys.departments("administrative-reports"), queryFn: masterApi.departments, retry: false });
+  const programs = useQuery({ queryKey: queryKeys.programs(`administrative-reports:${filters.department_id ?? "all"}`), queryFn: () => masterApi.programs(filters.department_id), retry: false });
+  const sections = useQuery({ queryKey: queryKeys.sections("administrative-reports", JSON.stringify({ term: filters.academic_term_id, department: filters.department_id, program: filters.program_id })), queryFn: () => masterApi.sections({ academic_term_id: filters.academic_term_id, department_id: filters.department_id, program_id: filters.program_id }), retry: false });
+  const courses = useQuery({ queryKey: queryKeys.report("administrative-course-options", {}), queryFn: () => masterApi.courses(), retry: false });
+  const faculty = useQuery({ queryKey: queryKeys.report("administrative-faculty-options", { department: filters.faculty_department_id ?? filters.department_id }), queryFn: () => masterApi.faculty(undefined, filters.faculty_department_id ?? filters.department_id), retry: false });
+
+  useEffect(() => {
+    if (!definition?.filters.some((item) => item.key === "academic_term_id") || filters.academic_term_id || !terms.data) return;
+    const preferred = terms.data.items.find((item) => item.is_current) ?? terms.data.items.find((item) => item.is_active);
+    if (preferred) setFilters((current) => ({ ...current, academic_term_id: preferred.id }));
+  }, [definition, filters.academic_term_id, terms.data]);
+
+  const request = useMemo<ReportRequest | null>(() => definition && columns.length ? ({ report_key: definition.key, filters: cleanFilters(filters), selected_columns: columns, sort_fields: sortFields, page, page_size: 50 }) : null, [definition, filters, columns, sortFields, page]);
+  const configurationSignature = request ? JSON.stringify({ ...request, page: undefined, page_size: undefined }) : "";
+  const [previewedSignature, setPreviewedSignature] = useState("");
+  const preview = useMutation({ mutationFn: (payload: ReportRequest) => reportsApi.preview(payload), onSuccess: (_, payload) => setPreviewedSignature(JSON.stringify({ ...payload, page: undefined, page_size: undefined })), onError: (error) => notify(apiErrorMessage(error), "error") });
+  const [exporting, setExporting] = useState<string>();
+
+  const runPreview = (nextPage = page) => {
+    if (!request) return;
+    preview.mutate({ ...request, page: nextPage });
+  };
+  const exportReport = async (format: "xlsx" | "csv" | "docx" | "pdf") => {
+    if (!request) return;
+    setExporting(format);
+    try {
+      const result = await reportsApi.export({ ...request, page: 1 }, format);
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = result.filename; anchor.click(); URL.revokeObjectURL(url);
+      notify(`${format === "xlsx" ? "Excel" : format === "docx" ? "Word" : format.toUpperCase()} report downloaded.`);
+    } catch (error) { notify(apiErrorMessage(error), "error"); }
+    finally { setExporting(undefined); }
+  };
+
+  if (definitions.isLoading) return <LoadingState label="Loading report definitions" />;
+  if (definitions.error) return <ErrorState message={`Failed to load report metadata: ${apiErrorMessage(definitions.error)}`} retry={() => void definitions.refetch()} />;
+  if (!definition) return <ErrorState message="Unknown administrative report." />;
+
+  const reportOptions = (definitions.data ?? []).map((item) => ({ value: item.key, label: item.title, description: item.description }));
+  const stale = Boolean(preview.data && previewedSignature !== configurationSignature);
+  return <>
+    <PageHeader title="Administrative Reports" description="Configure one canonical dataset, preview it, then export the same records to Excel, CSV, Word, or PDF." actions={<Link href="/reports?report=section-timetable" className="button-secondary">Operational reports</Link>} />
+    <Card className="mb-5"><SearchableSelect label="Report" value={reportKey} options={reportOptions} onChange={(value) => { setReportKey(value); router.replace(`/reports?report=${PREFIX}${value}`, { scroll: false }); }} /></Card>
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
+      <div className="space-y-5">
+        <ReportFilters definition={definition} filters={filters} setFilters={(next, changed) => { setFilters(next); setPage(1); if (["academic_term_id", "department_id", "program_id"].includes(changed)) setFilters(clearDependentFilters(next, changed)); }} options={{ terms: termOptions(terms.data?.items ?? []), departments: departmentOptions(departments.data?.items ?? []), programs: programOptions(programs.data?.items ?? []), sections: sectionOptions(sections.data?.items ?? [], terms.data?.items ?? []), courses: courseOptions(courses.data?.items ?? []), faculty: facultyOptions(faculty.data?.items ?? []) }} loading={{ academic_term_id: terms.isLoading, department_id: departments.isLoading, faculty_department_id: departments.isLoading, program_id: programs.isLoading, section_id: sections.isLoading, course_id: courses.isLoading, faculty_id: faculty.isLoading }} errors={{ academic_term_id: terms.error, department_id: departments.error, faculty_department_id: departments.error, program_id: programs.error, section_id: sections.error, course_id: courses.error, faculty_id: faculty.error }} />
+        <ColumnPicker definition={definition} selected={columns} onChange={(value) => { setColumns(value); setPage(1); }} />
+        <SortEditor definition={definition} value={sortFields} onChange={setSortFields} />
+      </div>
+      <div className="space-y-5">
+        <Card title="Preview & Export">
+          {columns.length > 8 && <p role="status" className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">This report contains many columns. Word and PDF will use landscape, compact formatting.</p>}
+          {!columns.length && <p role="alert" className="mb-3 text-sm text-red-700">Select at least one report column.</p>}
+          {stale && <p className="mb-3 text-sm text-amber-700">Configuration changed. Refresh Preview to see the latest selection.</p>}
+          <button className="button-primary w-full gap-2" disabled={!request || preview.isPending} onClick={() => runPreview(1)}><Eye className="h-4 w-4" />{preview.data ? "Refresh Preview" : "Preview Report"}</button>
+          <div className="mt-3 grid grid-cols-2 gap-2">{definition.supported_formats.map((format) => <button key={format} aria-label={`Export ${formatName(format)}`} className="button-secondary gap-2" disabled={!request || Boolean(exporting)} onClick={() => void exportReport(format)}><Download className="h-4 w-4" />{exporting === format ? "Exporting…" : formatName(format)}</button>)}</div>
+        </Card>
+        {preview.isPending ? <Card><LoadingState label="Generating report preview" /></Card> : preview.data ? <Preview result={preview.data} stale={stale} onPage={(next) => { setPage(next); runPreview(next); }} /> : <Card><EmptyState title="Preview not generated" detail="Choose filters, columns, and sorting, then select Preview Report." /></Card>}
+      </div>
+    </div>
+  </>;
+}
+
+type OptionCollection = { terms: SelectOption[]; departments: SelectOption[]; programs: SelectOption[]; sections: SelectOption[]; courses: SelectOption[]; faculty: SelectOption[] };
+
+function ReportFilters({ definition, filters, setFilters, options, loading, errors }: { definition: ReportDefinition; filters: Record<string, string>; setFilters(value: Record<string, string>, changed: string): void; options: OptionCollection; loading: Record<string, boolean | undefined>; errors: Record<string, unknown> }) {
+  const entityOptions: Record<string, SelectOption[]> = { academic_term_id: options.terms, department_id: options.departments, faculty_department_id: options.departments, program_id: options.programs, section_id: options.sections, course_id: options.courses, faculty_id: options.faculty };
+  return <Card title="Filters"><div className="grid gap-4 md:grid-cols-2">{definition.filters.map((filter) => filter.control === "entity" ? <SearchableSelect key={filter.key} label={filter.label} value={filters[filter.key] ?? ""} options={[{ value: "", label: "All" }, ...(entityOptions[filter.key] ?? [])]} onChange={(value) => setFilters({ ...filters, [filter.key]: value }, filter.key)} loading={Boolean(loading[filter.key])} error={errors[filter.key] ? apiErrorMessage(errors[filter.key]) : undefined} emptyMessage={`No ${filter.label.toLowerCase()} options available`} /> : <label key={filter.key}><span className="label">{filter.label}</span><select aria-label={filter.label} className="field" value={filters[filter.key] ?? ""} onChange={(event) => setFilters({ ...filters, [filter.key]: event.target.value }, filter.key)}><option value="">All</option>{filter.options.map((option) => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}</select></label>)}</div><button className="button-secondary mt-4 gap-2" onClick={() => setFilters({}, "clear")}><X className="h-4 w-4" />Clear Filters</button></Card>;
+}
+
+function ColumnPicker({ definition, selected, onChange }: { definition: ReportDefinition; selected: string[]; onChange(value: string[]): void }) {
+  const groups = Map.groupBy(definition.columns, (column) => column.group);
+  const move = (index: number, direction: -1 | 1) => { const next = [...selected]; const target = index + direction; if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; onChange(next); };
+  return <Card title="Columns"><div className="mb-4 flex flex-wrap gap-2"><button className="button-secondary" onClick={() => onChange(definition.columns.map((item) => item.key))}>Select All</button><button className="button-secondary" onClick={() => onChange([])}>Clear All</button><button className="button-secondary gap-2" onClick={() => onChange(definition.default_columns)}><RotateCcw className="h-4 w-4" />Restore Default</button></div><div className="grid gap-4 md:grid-cols-2">{Array.from(groups.entries()).map(([group, groupColumns]) => <fieldset key={group} className="rounded-lg border p-3"><legend className="px-1 text-sm font-semibold">{group}</legend><div className="space-y-2">{groupColumns.map((column) => <label key={column.key} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(column.key)} onChange={(event) => onChange(event.target.checked ? [...selected, column.key] : selected.filter((item) => item !== column.key))} />{column.label}</label>)}</div></fieldset>)}</div><h3 className="mb-2 mt-5 text-sm font-semibold">Selected Columns / Order</h3><ol className="space-y-2">{selected.map((key, index) => { const column = definition.columns.find((item) => item.key === key); return <li key={key} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm"><span>{index + 1}. {column?.label}</span><span className="flex"><button aria-label={`Move ${column?.label} up`} className="rounded p-1 hover:bg-slate-100" disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp className="h-4 w-4" /></button><button aria-label={`Move ${column?.label} down`} className="rounded p-1 hover:bg-slate-100" disabled={index === selected.length - 1} onClick={() => move(index, 1)}><ArrowDown className="h-4 w-4" /></button></span></li>; })}</ol></Card>;
+}
+
+function SortEditor({ definition, value, onChange }: { definition: ReportDefinition; value: ReportSort[]; onChange(value: ReportSort[]): void }) {
+  const sortable = definition.columns.filter((item) => item.sortable);
+  const move = (index: number, direction: -1 | 1) => { const next = [...value]; const target = index + direction; if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; onChange(next); };
+  return <Card title="Sorting"><div className="space-y-2">{value.map((sort, index) => <div key={`${sort.key}:${index}`} className="grid grid-cols-[1fr_130px_auto] gap-2"><select aria-label={`Sort field ${index + 1}`} className="field" value={sort.key} onChange={(event) => onChange(value.map((item, itemIndex) => itemIndex === index ? { ...item, key: event.target.value } : item))}>{sortable.map((column) => <option key={column.key} value={column.key}>{column.label}</option>)}</select><select aria-label={`Sort direction ${index + 1}`} className="field" value={sort.direction} onChange={(event) => onChange(value.map((item, itemIndex) => itemIndex === index ? { ...item, direction: event.target.value as "asc" | "desc" } : item))}><option value="asc">Ascending</option><option value="desc">Descending</option></select><span className="flex items-center"><button aria-label={`Move sort ${index + 1} up`} className="p-1" disabled={index === 0} onClick={() => move(index, -1)}><ArrowUp className="h-4 w-4" /></button><button aria-label={`Move sort ${index + 1} down`} className="p-1" disabled={index === value.length - 1} onClick={() => move(index, 1)}><ArrowDown className="h-4 w-4" /></button><button aria-label={`Remove sort ${index + 1}`} className="p-1" onClick={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))}><X className="h-4 w-4" /></button></span></div>)}</div><div className="mt-3 flex gap-2"><button className="button-secondary gap-2" disabled={value.length >= sortable.length} onClick={() => { const next = sortable.find((column) => !value.some((item) => item.key === column.key)); if (next) onChange([...value, { key: next.key, direction: "asc" }]); }}><Plus className="h-4 w-4" />Add Sort</button><button className="button-secondary" onClick={() => onChange(definition.default_sort)}>Reset Sorting</button></div></Card>;
+}
+
+function Preview({ result, stale, onPage }: { result: Awaited<ReturnType<typeof reportsApi.preview>>; stale: boolean; onPage(page: number): void }) {
+  return <Card title={result.title}><div className="mb-3 flex flex-wrap gap-2 text-xs text-slate-600">{result.filter_summary.length ? result.filter_summary.map((item) => <span key={item} className="rounded-full bg-slate-100 px-2 py-1">{item}</span>) : <span>No filters</span>}</div><p className="mb-3 text-sm font-medium">{result.total} record{result.total === 1 ? "" : "s"}{stale ? " · Preview is stale" : ""}</p>{!result.rows.length ? <EmptyState title="No records found for the selected filters." /> : <div className="overflow-x-auto"><table className="min-w-full text-left text-sm"><thead className="bg-slate-100 dark:bg-slate-800"><tr>{result.columns.map((column) => <th key={column.key} className="whitespace-nowrap px-3 py-2">{column.label}</th>)}</tr></thead><tbody className="divide-y">{result.rows.map((row, index) => <tr key={index}>{result.columns.map((column) => <td key={column.key} className="px-3 py-2 align-top">{display(row[column.key])}</td>)}</tr>)}</tbody></table></div>}<div className="mt-4 flex items-center justify-between"><button className="button-secondary" disabled={result.page <= 1} onClick={() => onPage(result.page - 1)}>Previous</button><span className="text-sm">Page {result.page} of {Math.max(result.pages, 1)}</span><button className="button-secondary" disabled={result.page >= result.pages} onClick={() => onPage(result.page + 1)}>Next</button></div></Card>;
+}
+
+function display(value: unknown) { return value === null || value === undefined || value === "" ? "—" : String(value); }
+function cleanFilters(filters: Record<string, string>) { return Object.fromEntries(Object.entries(filters).filter(([, value]) => value)); }
+function clearDependentFilters(filters: Record<string, string>, changed: string) { const next = { ...filters }; if (changed === "academic_term_id") delete next.section_id; if (changed === "department_id") { delete next.program_id; delete next.section_id; } if (changed === "program_id") delete next.section_id; return next; }
+function formatName(format: string) { return format === "xlsx" ? "Excel" : format === "docx" ? "Word" : format.toUpperCase(); }
+function termOptions(items: Awaited<ReturnType<typeof listAcademicTerms>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.academic_year} • ${item.term_name}`, description: item.is_current ? "Current" : item.is_active ? "Active" : "Historical" })); }
+function departmentOptions(items: Awaited<ReturnType<typeof masterApi.departments>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.department_code} • ${item.department_name}` })); }
+function programOptions(items: Awaited<ReturnType<typeof masterApi.programs>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.program_code} • ${item.program_name}` })); }
+function sectionOptions(items: Awaited<ReturnType<typeof masterApi.sections>>["items"], terms: Awaited<ReturnType<typeof listAcademicTerms>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: sectionLabel(item, sectionTerm(item, terms)) })); }
+function courseOptions(items: Awaited<ReturnType<typeof masterApi.courses>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.course_code} • ${item.course_name}`, description: item.course_type })); }
+function facultyOptions(items: Awaited<ReturnType<typeof masterApi.faculty>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.faculty_code} • ${item.full_name}`, description: item.designation })); }

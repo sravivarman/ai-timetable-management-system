@@ -30,6 +30,7 @@ from app.modules.timetables.router import router as timetables_router, version_r
 from app.modules.timetables.entry_router import entry_router, version_entry_router
 from app.modules.timetables.solver_router import solver_run_router, version_solver_router
 from app.modules.timetables.review_router import review_entry_router,review_version_router,workflow_router
+from app.modules.reports.router import router as reports_router
 
 
 @asynccontextmanager
@@ -92,6 +93,7 @@ def create_application() -> FastAPI:
     application.include_router(review_version_router, prefix=settings.api_v1_prefix)
     application.include_router(review_entry_router, prefix=settings.api_v1_prefix)
     application.include_router(workflow_router, prefix=settings.api_v1_prefix)
+    application.include_router(reports_router, prefix=settings.api_v1_prefix)
     return application
 
 

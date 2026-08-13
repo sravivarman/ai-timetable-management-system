@@ -34,3 +34,11 @@ class FacilitiesPermissionsTests(unittest.TestCase):
   self.assertTrue(both<=grants["Administrator"]);self.assertTrue(both<=grants["Timetable Coordinator"])
   for role in ("HOD","Dean","Principal"):self.assertIn(("timetable_solver","read"),grants[role]);self.assertNotIn(("timetable_solver","run"),grants[role])
   self.assertEqual(self.db.scalar(select(func.count()).select_from(Permission).where(Permission.resource=="timetable_solver")),2)
+ def test_seed_grants_idempotent_report_permission(self):
+  original=seed_script.SessionLocal;seed_script.SessionLocal=sessionmaker(bind=self.engine)
+  try:seed_script.seed();seed_script.seed()
+  finally:seed_script.SessionLocal=original
+  for name in ("Administrator","Timetable Coordinator","HOD","Dean","Principal"):
+   grants={(p.resource,p.action) for p in self.db.scalar(select(Role).where(Role.name==name)).permissions}
+   self.assertIn(("reports","read"),grants)
+  self.assertEqual(self.db.scalar(select(func.count()).select_from(Permission).where(Permission.resource=="reports",Permission.action=="read")),1)

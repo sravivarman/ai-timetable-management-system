@@ -36,4 +36,5 @@ export const queryKeys = {
   freeResources: (versionId: string, resource: string, slot: object | null) => ["free-resources", versionId, resource, slot] as const,
   globalSearch: (term: string) => ["global-search", term] as const,
   report: (type: string, filters: object) => ["report", type, filters] as const,
+  reportDefinitions: ["report-definitions"] as const,
 };

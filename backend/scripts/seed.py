@@ -79,6 +79,7 @@ PERMISSION_DEFINITIONS = {
     ("timetable_audit", "read"): "View timetable audit and workflow history",
     ("combined_teaching_groups", "read"): "View combined teaching groups",
     ("combined_teaching_groups", "manage"): "Manage combined teaching groups",
+    ("reports", "read"): "Preview and export administrative reports",
 }
 
 DEPARTMENT_DEFINITIONS = {
@@ -171,6 +172,7 @@ def seed() -> None:
         timetable_solver_read,timetable_solver_run=existing_permissions[("timetable_solver","read")],existing_permissions[("timetable_solver","run")]
         phase3={key:existing_permissions[key] for key in (("timetable_views","read"),("timetable_entries","move"),("timetable_entries","lock"),("timetable_versions","copy"),("timetable_workflow","review"),("timetable_workflow","approve"),("timetable_workflow","publish"),("timetable_workflow","archive"),("timetable_audit","read"))}
         combined_permissions = [existing_permissions[("combined_teaching_groups", action)] for action in ("read", "manage")]
+        reports_read = existing_permissions[("reports", "read")]
         hod_role = existing_roles["HOD"]
         if departments_view not in administrator_role.permissions:
             administrator_role.permissions.append(departments_view)
@@ -273,6 +275,9 @@ def seed() -> None:
         for role in (administrator_role, timetable_coordinator_role, hod_role):
             for permission in combined_permissions:
                 if permission not in role.permissions: role.permissions.append(permission)
+        for role in (administrator_role, timetable_coordinator_role, hod_role, existing_roles["Dean"], existing_roles["Principal"]):
+            if reports_read not in role.permissions:
+                role.permissions.append(reports_read)
 
         administrator = session.scalar(
             select(User)
