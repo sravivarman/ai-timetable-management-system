@@ -107,6 +107,11 @@ function CombinedTeachingSummary({ values, lookupRecords }: { values: Record<str
 export function toPayload(config: MasterConfig, values: Record<string, FormValue>, only?: Set<string>, lookupRecords: Record<string, MasterRecord[]> = {}) { const payload: Record<string, unknown> = {}; for (const field of config.fields) { if (!isVisible(field, values) || only && !only.has(field.name)) continue; const value = values[field.name]; if (value === "" || value == null || Array.isArray(value) && !value.length) { if (!only && !field.required) payload[field.name] = field.type === "multiselect" ? [] : null; continue; } payload[field.name] = field.type === "number" ? Number(value) : value; } if (config.slug === "courses" && (!only || only.has("grouping_mode")) && values.grouping_mode === "FULL_SECTION") payload.default_group_count = 1; if (config.slug === "courses" && (!only || only.has("venue_requirement")) && !["LABORATORY_ONLY", "CLASSROOM_OR_LABORATORY"].includes(String(values.venue_requirement))) { payload.default_laboratory_id = null; payload.eligible_laboratory_ids = []; } if (config.slug === "course-offerings") { const course = (lookupRecords["/courses"] ?? []).find((row) => row.id === String(values.course_id ?? "")); if (course) normalizeOfferingLaboratoryPayload(payload, course); else if (values.laboratory_selection_mode === "AUTO") payload.laboratory_override_id = null; } return payload; }
 
 function filteredLookups(config: MasterConfig, field: MasterField, values: Record<string, FormValue>, lookupRecords: Record<string, MasterRecord[]>) {
+  if (field.lookup?.endpoint === "/course-offerings" && ["theory-allocations", "laboratory-allocations"].includes(config.slug)) {
+    const activity = config.slug === "laboratory-allocations";
+    const offerings = (lookupRecords["/course-offerings"] ?? []).filter((row) => activity ? ["LABORATORY", "PRACTICAL"].includes(String(row.course_type)) : !["LABORATORY", "PRACTICAL"].includes(String(row.course_type)));
+    return { ...lookupRecords, "/course-offerings": offerings };
+  }
   if (field.lookup?.endpoint !== "/laboratories") return lookupRecords;
   let allowed: string[] | undefined;
   if (config.slug === "courses" && field.name === "default_laboratory_id") allowed = Array.isArray(values.eligible_laboratory_ids) ? values.eligible_laboratory_ids : [];

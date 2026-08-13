@@ -12,6 +12,7 @@ from app.modules.timetable_validation.models import ValidationRun
 from app.modules.resource_availability.service import snapshot_resource_is_available
 from app.modules.timetables.models import SolverRun,Timetable,TimetableEntry,TimetableEntryAudit,TimetableVersion
 from app.modules.timetables.capacity import entry_capacity_demand
+from app.modules.faculty_allocations.eligibility import uses_activity_faculty_allocations
 from app.modules.timetables.service import solver_input_builder
 from app.modules.timetables.optimization import PROFILE_DEFAULT_SECONDS,build_optimization_config
 
@@ -143,12 +144,12 @@ class TimetableSolverService:
     if not offering:continue
     faculty_ids=[assignment.get("main_faculty_id"),*(assignment.get("supporting_faculty_ids") or [])]
     faculty_ids=[faculty for faculty in faculty_ids if faculty]
-    if offering["course_type"]=="LABORATORY":
+    if uses_activity_faculty_allocations(offering["course_type"]):
      allocation=next((item for item in lab_alloc[offering["id"]] if item["role_type"]=="MAIN" and item["faculty_id"]==assignment.get("main_faculty_id")),None)
     else:
      allocation=next((item for item in theory_alloc[offering["id"]] if item["faculty_id"]==assignment.get("main_faculty_id")),None)
     candidate_laboratories=[assignment["laboratory_id"]] if assignment.get("laboratory_id") else list(offering.get("eligible_laboratory_ids") or [])
-    children.append({"assignment_id":assignment["id"],"offering":offering,"batch_id":assignment["batch_id"],"capacity_demand":batch_by_id[assignment["batch_id"]]["student_count"],"laboratory_id":assignment.get("laboratory_id"),"candidate_laboratory_ids":candidate_laboratories,"faculty_id":assignment.get("main_faculty_id"),"faculty_ids":faculty_ids,"lab_allocation_id":allocation["id"] if offering["course_type"]=="LABORATORY" and allocation else None,"length":assignment.get("session_duration"),"entry_type":offering["course_type"]})
+    children.append({"assignment_id":assignment["id"],"offering":offering,"batch_id":assignment["batch_id"],"capacity_demand":batch_by_id[assignment["batch_id"]]["student_count"],"laboratory_id":assignment.get("laboratory_id"),"candidate_laboratory_ids":candidate_laboratories,"faculty_id":assignment.get("main_faculty_id"),"faculty_ids":faculty_ids,"lab_allocation_id":allocation["id"] if uses_activity_faculty_allocations(offering["course_type"]) and allocation else None,"length":assignment.get("session_duration"),"entry_type":offering["course_type"]})
    if len(children)<2 or len({child["batch_id"] for child in children})!=len(children) or any(not child["candidate_laboratory_ids"] for child in children) or len({child["length"] for child in children})!=1:
     input_errors.append(f"Invalid synchronized rotation block {block['block_number']}");continue
    length=children[0]["length"]
@@ -181,16 +182,16 @@ class TimetableSolverService:
    elif venue=="CLASSROOM_OR_LABORATORY":venue_options=[{"classroom_id":value,"laboratory_id":None} for value in classroom_ids]+[{"classroom_id":None,"laboratory_id":value} for value in laboratory_ids]
    else:venue_options=[{"classroom_id":None,"laboratory_id":None}]
    if not venue_options:input_errors.append(f"No eligible venue for {offering['course_code']}");continue
-   lab_course=offering["course_type"]=="LABORATORY"
-   if lab_course:
+   activity_course=uses_activity_faculty_allocations(offering["course_type"])
+   if activity_course:
     mains=sorted((item for item in lab_alloc[offering["id"]] if item["role_type"]=="MAIN"),key=lambda item:(item["faculty_id"],item["id"]))
     if not mains:input_errors.append(f"Missing MAIN faculty for {offering['course_code']}");continue
     main=mains[0]
    else:
     allocations=sorted(theory_alloc[offering["id"]],key=lambda item:(item["faculty_id"],item["id"]));main=allocations[0] if allocations else None
-    if offering["course_type"] in {"THEORY","CDC","PRACTICAL"} and not main:input_errors.append(f"Missing faculty for {offering['course_code']}");continue
+    if offering["course_type"] in {"THEORY","CDC"} and not main:input_errors.append(f"Missing faculty for {offering['course_code']}");continue
    supporting_groups=defaultdict(list)
-   if lab_course:
+   if activity_course:
     for supporting in sorted((item for item in lab_alloc[offering["id"]] if item["role_type"]=="SUPPORTING"),key=lambda item:(item.get("alternative_group_code") or item["id"],item["faculty_id"],item["id"])):supporting_groups[supporting.get("alternative_group_code") or supporting["id"]].append(supporting)
    for batch in selected_batches:
     batch_id=batch["id"] if batch else None;already=sum(1 for item in existing if item.get("student_batch_id")==batch_id)
@@ -209,7 +210,7 @@ class TimetableSolverService:
      combinations=product(*support_options) if support_options else [()]
      faculty_options=[sorted({*([main["faculty_id"]] if main else []),*(item["faculty_id"] for item in selected)}) for selected in combinations]
      demand=batch["student_count"] if batch else offering["full_section_capacity_demand"]
-     units.append({"offering":offering,"section_id":offering["section_id"],"section_ids":[offering["section_id"]],"entry_type":offering["course_type"],"length":duration,"faculty_options":faculty_options,"faculty_id":main["faculty_id"] if main else None,"lab_allocation_id":main["id"] if lab_course else None,"venue_options":venue_options,"classroom_id":venue_options[0]["classroom_id"],"laboratory_id":venue_options[0]["laboratory_id"],"laboratory_ids":[venue_options[0]["laboratory_id"]] if venue_options[0]["laboratory_id"] else [],"batch_id":batch_id,"batch_ids":[batch_id] if batch_id else [],"capacity_demand":demand,"session_number":session_number})
+     units.append({"offering":offering,"section_id":offering["section_id"],"section_ids":[offering["section_id"]],"entry_type":offering["course_type"],"length":duration,"faculty_options":faculty_options,"faculty_id":main["faculty_id"] if main else None,"lab_allocation_id":main["id"] if activity_course else None,"venue_options":venue_options,"classroom_id":venue_options[0]["classroom_id"],"laboratory_id":venue_options[0]["laboratory_id"],"laboratory_ids":[venue_options[0]["laboratory_id"]] if venue_options[0]["laboratory_id"] else [],"batch_id":batch_id,"batch_ids":[batch_id] if batch_id else [],"capacity_demand":demand,"session_number":session_number})
 
   model=cp_model.CpModel();assignments=[];resource_vars=defaultdict(list);laboratory_terms=defaultdict(list);section_vars=defaultdict(lambda:defaultdict(list));course_day=defaultdict(list);lab_day=defaultdict(list);faculty_day=defaultdict(list)
   if input_errors:model.add(0==1)
@@ -444,7 +445,7 @@ class TimetableSolverService:
   for (section,day_id),values in section_rooms.items():
    rooms=[room for _,room in sorted(values)];room_changes[section]+=sum(left!=right for left,right in zip(rooms,rooms[1:]))
   quality_metrics={"optimization_profile":optimization_profile,"total_penalty":total_penalty,"quality_score":quality_score,"objective_breakdown":objective_breakdown,"faculty_daily_loads":{key:dict(value) for key,value in faculty_loads.items()},"faculty_first_last_counts":dict(first_last),"faculty_idle_gap_counts":dict(faculty_gap_counts),"section_daily_loads":{key:dict(value) for key,value in section_loads.items()},"section_idle_gap_counts":dict(section_gap_counts),"course_day_distribution":{key:dict(value) for key,value in course_distribution.items()},"laboratory_day_distribution":{key:dict(value) for key,value in laboratory_distribution.items()},"room_change_counts":dict(room_changes)}
-  selected_supporting=[{"course_offering_id":record["unit"]["offering"]["id"],"session_number":record["unit"].get("session_number"),"student_batch_id":record["unit"].get("batch_id"),"faculty_ids":[faculty for faculty in record["faculty_ids"] if faculty!=record["unit"]["faculty_id"]]} for record in selected_records if record["unit"]["entry_type"]=="LABORATORY" and len(record["faculty_ids"])>1]
+  selected_supporting=[{"course_offering_id":record["unit"]["offering"]["id"],"session_number":record["unit"].get("session_number"),"student_batch_id":record["unit"].get("batch_id"),"faculty_ids":[faculty for faculty in record["faculty_ids"] if faculty!=record["unit"]["faculty_id"]]} for record in selected_records if uses_activity_faculty_allocations(record["unit"]["entry_type"]) and len(record["faculty_ids"])>1]
   statistics.update({"objective_breakdown":objective_breakdown,"total_objective_value":objective_value,"total_penalty":total_penalty,"solution_quality_score":quality_score,"quality_score_formula":"max(0, 10000 / (100 + total_penalty))","solver_gap":solver_gap,"selected_supporting_faculty":selected_supporting,"quality_metrics":quality_metrics})
   return {"status":status_name,"entries":entries,"objective_value":objective_value,"best_bound":bound,"message":"Optimized feasible timetable generated using Phase 2 weighted soft constraints","statistics":statistics}
 

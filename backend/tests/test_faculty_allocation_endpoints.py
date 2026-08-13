@@ -26,9 +26,10 @@ class FacultyAllocationEndpointTests(unittest.TestCase):
             program = Program(department_id=self.context.active_department.id, program_code="BTECH-TST", program_name="B.Tech Test"); db.add(program); db.flush()
             section = Section(program_id=program.id, academic_term_id=term.id, section_name="A", section_code="TST-A", student_strength=60)
             course = Course(course_code="A9001", course_name="Theory", offering_department_id=self.context.active_department.id, course_type="THEORY", weekly_periods=4, counts_toward_workload=True)
+            practical = Course(course_code="A9021", course_name="Community Centered Design Thinking", offering_department_id=self.context.active_department.id, course_type="PRACTICAL", weekly_periods=3, grouping_mode="GROUPED", default_group_count=2, session_duration=3, sessions_per_week=1, venue_requirement="CLASSROOM_ONLY", counts_toward_workload=True)
             faculty = Faculty(faculty_code="VCE001", full_name="Test Faculty", department_id=self.context.active_department.id, designation="Assistant Professor", institutional_email="faculty.alloc@vce.ac.in", maximum_weekly_workload=20)
-            db.add_all([section, course, faculty]); db.flush(); offering = CourseOffering(course_id=course.id, section_id=section.id, academic_term_id=term.id); db.add(offering); db.commit()
-            self.offering_id, self.faculty_id = offering.id, faculty.id
+            db.add_all([section, course, practical, faculty]); db.flush(); offering = CourseOffering(course_id=course.id, section_id=section.id, academic_term_id=term.id); practical_offering=CourseOffering(course_id=practical.id,section_id=section.id,academic_term_id=term.id);db.add_all([offering,practical_offering]); db.commit()
+            self.offering_id, self.practical_offering_id, self.faculty_id = offering.id, practical_offering.id, faculty.id
         finally: db.close()
         self.client = TestClient(app)
 
@@ -42,3 +43,9 @@ class FacultyAllocationEndpointTests(unittest.TestCase):
         self.assertEqual(readable.status_code, 200)
         forbidden = self.client.post("/api/v1/faculty-allocations/theory", json=payload, headers=self.context.headers["coordinator"])
         self.assertEqual(forbidden.status_code, 403)
+
+    def test_practical_activity_endpoint_accepts_main_and_theory_is_rejected(self):
+        activity={"course_offering_id":str(self.practical_offering_id),"faculty_id":str(self.faculty_id),"role_type":"MAIN","minimum_sessions_per_week":1,"maximum_sessions_per_week":1}
+        created=self.client.post("/api/v1/faculty-allocations/laboratory",json=activity,headers=self.context.headers["hod"]);self.assertEqual(created.status_code,201,created.text)
+        self.assertEqual(created.json()["role_type"],"MAIN")
+        rejected=self.client.post("/api/v1/faculty-allocations/laboratory",json={**activity,"course_offering_id":str(self.offering_id)},headers=self.context.headers["hod"]);self.assertEqual(rejected.status_code,422,rejected.text);self.assertIn("laboratory or practical",rejected.json()["detail"])

@@ -28,9 +28,9 @@ export const masterDataApi = {
   },
   async get(config: MasterConfig, id: string) { return (await api.get<MasterRecord>(`${config.endpoint}/${id}`)).data; },
   async create(config: MasterConfig, payload: Record<string, unknown>) { return (await api.post<MasterRecord>(config.endpoint, payload)).data; },
-  async update(config: MasterConfig, id: string, payload: Record<string, unknown>) { return (await api.put<MasterRecord>(`${config.endpoint}/${id}`, payload)).data; },
-  async remove(config: MasterConfig, id: string) { await api.delete(`${config.endpoint}/${id}`); },
-  async restore(config: MasterConfig, id: string) { return (await api.post<MasterRecord>(`${config.endpoint}/${id}/restore`)).data; },
+  async update(config: MasterConfig, id: string, payload: Record<string, unknown>, expectedUpdatedAt?: string) { return (await api.put<MasterRecord>(`${config.endpoint}/${id}`, payload, importBaselineHeaders(id, expectedUpdatedAt))).data; },
+  async remove(config: MasterConfig, id: string, expectedUpdatedAt?: string) { await api.delete(`${config.endpoint}/${id}`, importBaselineHeaders(id, expectedUpdatedAt)); },
+  async restore(config: MasterConfig, id: string, expectedUpdatedAt?: string) { return (await api.post<MasterRecord>(`${config.endpoint}/${id}/restore`, undefined, importBaselineHeaders(id, expectedUpdatedAt))).data; },
   async lookup(endpoint: string, includeInactive = false): Promise<MasterRecord[]> {
     const rows = await lookupRows(endpoint, includeInactive);
     if (endpoint === "/classrooms") {
@@ -41,10 +41,10 @@ export const masterDataApi = {
     }
     if (endpoint === "/course-offerings") {
       const [courses, sections] = await Promise.all([lookupRows("/courses", includeInactive), lookupRows("/sections", includeInactive)]);
-      const courseMap = new Map(courses.map((row) => [row.id, [row.course_code, row.course_name].filter(Boolean).join(" - ")]));
+      const courseMap = new Map(courses.map((row) => [row.id, row]));
       const terms = await lookupRows("/academic-terms", true);
       const sectionMap = new Map(sections.map((row) => [row.id, row]));
-      return rows.map((row) => { const section = sectionMap.get(String(row.section_id)); return ({ ...row, section_code: section?.section_code, section_strength: section?.student_strength, display_label: `${courseMap.get(String(row.course_id)) ?? "Course metadata unavailable"} (${section ? sectionLabel(section, sectionTerm(section, terms)) : "Section metadata unavailable"})` }); });
+      return rows.map((row) => { const section = sectionMap.get(String(row.section_id)); const course = courseMap.get(String(row.course_id)); const courseLabel = course ? [course.course_code, course.course_name].filter(Boolean).join(" - ") : "Course metadata unavailable"; return ({ ...row, course_code: course?.course_code, course_name: course?.course_name, course_type: course?.course_type, section_code: section?.section_code, section_strength: section?.student_strength, display_label: `${courseLabel} (${section ? sectionLabel(section, sectionTerm(section, terms)) : "Section metadata unavailable"})` }); });
     }
     if (endpoint === "/laboratory-batch-configurations") {
       const offerings: MasterRecord[] = await masterDataApi.lookup("/course-offerings", includeInactive);
@@ -62,17 +62,22 @@ export const masterDataApi = {
   async updateRotationAssignment(assignmentId: string, payload: Record<string, unknown>) { return (await api.put<RotationAssignment>(`/laboratory-rotations/assignments/${assignmentId}`, payload)).data; },
 };
 
+function importBaselineHeaders(id: string, expectedUpdatedAt?: string) {
+  return expectedUpdatedAt ? { headers: { "X-Import-Target-Id": id, "X-Import-Expected-Updated-At": expectedUpdatedAt } } : undefined;
+}
+
 async function lookupRows(endpoint: string, includeInactive = false): Promise<MasterRecord[]> {
-  const active = await pagedLookupRows(endpoint, true);
+  if (includeInactive && ["/departments", "/programs"].includes(endpoint)) return pagedLookupRows(endpoint, { include_inactive: true });
+  const active = await pagedLookupRows(endpoint, { is_active: true });
   if (!includeInactive) return active;
-  const inactive = await pagedLookupRows(endpoint, false);
+  const inactive = await pagedLookupRows(endpoint, { is_active: false });
   return [...new Map([...active, ...inactive].map((row) => [row.id, row])).values()];
 }
 
-async function pagedLookupRows(endpoint: string, isActive: boolean): Promise<MasterRecord[]> {
-  const first = normalizePage((await api.get(endpoint, { params: { page: 1, page_size: 100, is_active: isActive } })).data, 1, 100);
+async function pagedLookupRows(endpoint: string, filters: Record<string, boolean>): Promise<MasterRecord[]> {
+  const first = normalizePage((await api.get(endpoint, { params: { page: 1, page_size: 100, ...filters } })).data, 1, 100);
   const items = [...first.items];
-  for (let page = 2; page <= first.pages; page++) items.push(...normalizePage((await api.get(endpoint, { params: { page, page_size: 100, is_active: isActive } })).data, page, 100).items);
+  for (let page = 2; page <= first.pages; page++) items.push(...normalizePage((await api.get(endpoint, { params: { page, page_size: 100, ...filters } })).data, page, 100).items);
   return items;
 }
 

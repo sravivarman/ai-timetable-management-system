@@ -170,10 +170,13 @@ class TimetableSolverTests(unittest.TestCase):
    db.add(practical);db.flush()
    offering=CourseOffering(course_id=practical.id,section_id=self.fixture.section.id,academic_term_id=self.fixture.term.id)
    db.add(offering);db.flush()
-   db.add_all([TheoryFacultyAllocation(course_offering_id=offering.id,faculty_id=self.fixture.faculty.id),LaboratoryBatchConfiguration(course_offering_id=offering.id,section_id=self.fixture.section.id,number_of_groups=2,is_rotation_enabled=False)])
+   db.add_all([LaboratoryFacultyAllocation(course_offering_id=offering.id,faculty_id=self.fixture.faculty.id,role_type="MAIN"),LaboratoryBatchConfiguration(course_offering_id=offering.id,section_id=self.fixture.section.id,number_of_groups=2,is_rotation_enabled=False)])
+   db.get(FacultyAvailability,self.fixture.availability.id).availability_type="unavailable"
+   for period in range(2,8):db.add(FacultyAvailability(faculty_id=self.fixture.faculty.id,academic_term_id=self.fixture.term.id,day_of_week="Monday",period_number=period,availability_type="unavailable"))
    db.commit();offering_id=offering.id
    issues,_=validate_prerequisites(db,ValidationRunRequest(academic_term_id=self.fixture.term.id,scope_type="SECTION",section_id=self.fixture.section.id))
    self.assertFalse(any(issue["issue_code"]=="LABORATORY_MISSING" and str(issue.get("entity_id"))==str(offering_id) for issue in issues))
+   self.assertFalse(any(issue["issue_code"]=="FACULTY_ALLOCATION_MISSING" and str(issue.get("entity_id"))==str(offering_id) for issue in issues))
   finally:db.close()
   snapshot=self.build().json()["snapshot_json"]
   practical_snapshot=next(item for item in snapshot["course_offerings"] if item["id"]==str(offering_id))
@@ -182,7 +185,7 @@ class TimetableSolverTests(unittest.TestCase):
   db=self.ctx.session_factory()
   try:
    entries=list(db.scalars(select(TimetableEntry).where(TimetableEntry.course_offering_id==offering_id)))
-   self.assertEqual(len(entries),2);self.assertTrue(all(entry.session_length==3 and entry.classroom_id==self.fixture.classroom.id and entry.laboratory_id is None for entry in entries));self.assertEqual(len({entry.student_batch_id for entry in entries}),2);self.assertTrue(all(entry.laboratory_rotation_block_id is None for entry in entries))
+   self.assertEqual(len(entries),2);self.assertTrue(all(entry.entry_type=="PRACTICAL" and entry.session_length==3 and entry.classroom_id==self.fixture.classroom.id and entry.laboratory_id is None and entry.laboratory_faculty_allocation_id is not None for entry in entries));self.assertEqual(len({entry.student_batch_id for entry in entries}),2);self.assertTrue(all(entry.laboratory_rotation_block_id is None for entry in entries));self.assertTrue(all(entry.working_day_id!=self.fixture.working_day.id for entry in entries));self.assertNotEqual((entries[0].working_day_id,entries[0].period_number),(entries[1].working_day_id,entries[1].period_number))
   finally:db.close()
 
  def test_solver_schedules_six_configured_student_groups_without_special_branches(self):

@@ -38,12 +38,12 @@ const naturalKeys: Record<string, string[]> = {
   "faculty-scheduling-policies": ["faculty_id", "academic_term_id"],
   "course-offerings": ["course_id", "section_id", "academic_term_id"],
   "combined-teaching-groups": ["academic_term_id", "group_code"],
-  "theory-allocations": ["course_offering_id", "faculty_id"],
+  "theory-allocations": ["course_offering_id"],
   "laboratory-allocations": ["course_offering_id", "faculty_id", "role_type"],
   "student-batches": ["section_id", "batch_name"],
   "batch-configurations": ["course_offering_id"],
   rotations: ["laboratory_batch_configuration_id", "rotation_code"],
-  "classroom-assignments": ["section_id", "classroom_id", "academic_term_id"],
+  "classroom-assignments": ["section_id", "academic_term_id"],
   "lab-availability-blocks": ["laboratory_id", "academic_term_id", "working_day_id", "period_number"],
 };
 
@@ -68,7 +68,7 @@ export function requiredCsvColumns(config: MasterConfig): string[] {
 }
 
 export function importLookupEndpoints(config: MasterConfig): string[] {
-  const endpoints = new Set<string>();
+  const endpoints = new Set<string>([config.endpoint]);
   for (const field of config.fields) if (field.lookup) endpoints.add(field.lookup.endpoint);
   if ([...config.fields].some((field) => ["section_id", "course_offering_id", "course_offering_ids", "laboratory_batch_configuration_id"].includes(field.name))) endpoints.add("/academic-terms");
   if ([...config.fields].some((field) => ["course_offering_id", "course_offering_ids", "laboratory_batch_configuration_id"].includes(field.name))) {
@@ -123,6 +123,12 @@ export function resolveCsvImportRow(config: MasterConfig, source: Record<string,
     references.push(reference);
   }
   const converted = coerceCsvRow(config, internalRow);
+  if (["theory-allocations", "laboratory-allocations"].includes(config.slug)) {
+    const offering = (lookups["/course-offerings"] ?? []).find((record) => record.id === String(converted.payload.course_offering_id ?? ""));
+    const activity = offering && ["LABORATORY", "PRACTICAL"].includes(String(offering.course_type));
+    if (offering && config.slug === "laboratory-allocations" && !activity) references.push({ targetField: "course_offering_id", sourceColumns: ["course_code", "section_code", "academic_term_code"], original: [input.course_code, input.section_code, input.academic_term_code].filter(Boolean).join(" | "), error: "Activity faculty allocations support only laboratory or practical course offerings." });
+    if (offering && config.slug === "theory-allocations" && activity) references.push({ targetField: "course_offering_id", sourceColumns: ["course_code", "section_code", "academic_term_code"], original: [input.course_code, input.section_code, input.academic_term_code].filter(Boolean).join(" | "), error: "Use Activity Faculty Allocations for laboratory or practical course offerings." });
+  }
   if (config.slug === "course-offerings") {
     const course = (lookups["/courses"] ?? []).find((record) => record.id === String(converted.payload.course_id ?? ""));
     if (course) normalizeOfferingLaboratoryPayload(converted.payload, course);
@@ -145,7 +151,7 @@ export function addDuplicateCsvErrors(config: MasterConfig, rows: ResolvedImport
   const groups = new Map<string, number[]>();
   rows.forEach((row, index) => {
     if (row.errors.length) return;
-    const key = naturalKey(config, row.payload);
+    const key = importBusinessKey(config, row.payload);
     if (key) groups.set(key, [...(groups.get(key) ?? []), index]);
   });
   const duplicateIndexes = new Set([...groups.values()].filter((indexes) => indexes.length > 1).flat());
@@ -153,14 +159,20 @@ export function addDuplicateCsvErrors(config: MasterConfig, rows: ResolvedImport
 }
 
 export function findExistingImportRecord(config: MasterConfig, payload: Record<string, unknown>, records: MasterRecord[]): { record?: MasterRecord; error?: string } {
-  const keys = naturalKeys[config.slug];
-  if (!keys) return {};
-  const matches = records.filter((record) => keys.every((key) => comparable(record[key]) === comparable(payload[key])));
+  const key = importBusinessKey(config, payload);
+  if (!key) return {};
+  const matches = records.filter((record) => importBusinessKey(config, record) === key);
   if (matches.length > 1) return { error: `Existing ${config.singular.toLowerCase()} records are ambiguous for this business key.` };
   return { record: matches[0] };
 }
 
-function naturalKey(config: MasterConfig, payload: Record<string, unknown>): string | undefined {
+export function importBusinessKey(config: MasterConfig, payload: Record<string, unknown>): string | undefined {
+  if (config.slug === "classroom-assignments") {
+    const section = payload.section_id; const term = payload.academic_term_id;
+    if (!section || !term) return undefined;
+    if (payload.is_primary !== false) return `${comparable(section)}|${comparable(term)}|PRIMARY`;
+    return [section, term, "ALTERNATIVE", payload.classroom_id, payload.effective_from, payload.effective_to].map(comparable).join("|");
+  }
   const keys = naturalKeys[config.slug];
   if (!keys || keys.some((key) => payload[key] == null || payload[key] === "")) return undefined;
   return keys.map((key) => comparable(payload[key])).join("|");

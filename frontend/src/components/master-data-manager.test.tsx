@@ -52,6 +52,15 @@ describe("master-data manager", () => {
     expect(screen.queryByRole("button", { name: "Duplicate" })).not.toBeInTheDocument();
   });
 
+  it("uses Activity Faculty Allocations terminology", async () => {
+    vi.mocked(masterDataApi.list).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 });
+    renderWithProviders(<MasterDataManager config={masterConfigs["laboratory-allocations"]} module="faculty-allocations" variant="laboratory" />);
+    expect(await screen.findByRole("heading", { name: "Activity Faculty Allocations" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Theory Faculty Allocations" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Activity Faculty Allocations" })).toHaveAttribute("href", "/master-data/faculty-allocations?variant=laboratory");
+    expect(screen.getByText(/laboratory and practical activities, including grouped and rotational sessions/i)).toBeInTheDocument();
+  });
+
   it("activates the selected academic term, clears the previous current term, and refreshes dependent queries", async () => {
     const oldTerm = { id: "term-old", academic_year: "2025-26", term_name: "I-I", year_number: 1, semester_number: 1, start_date: "2025-08-01", end_date: "2025-12-20", is_active: true, is_current: true, is_first_year_term: true };
     const newTerm = { id: "term-new", academic_year: "2026-27", term_name: "II-I", year_number: 2, semester_number: 1, start_date: "2026-07-01", end_date: "2026-11-30", is_active: true, is_current: false, is_first_year_term: false };

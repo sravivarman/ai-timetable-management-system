@@ -12,7 +12,7 @@ const course = { id: "course-1", course_code: "CS301", course_name: "Operating S
 const classroom = { id: "classroom-1", room_number: "3204", room_name: "CSE Block", is_active: true };
 const laboratory = { id: "laboratory-1", laboratory_code: "CSE-LAB-01", laboratory_name: "Programming Lab", is_active: true };
 const workingDay = { id: "day-1", day_name: "Monday", is_active: true, is_working_day: true };
-const offering = { id: "offering-1", course_id: course.id, section_id: section.id, academic_term_id: term.id, is_active: true };
+const offering = { id: "offering-1", course_id: course.id, section_id: section.id, academic_term_id: term.id, course_type: "THEORY", is_active: true };
 const sectionB = { ...section, id: "section-2", section_code: "CSE-B" };
 const offeringB = { ...offering, id: "offering-2", section_id: sectionB.id };
 
@@ -57,6 +57,21 @@ describe("readable CSV import resolution", () => {
     expect(block.payload).toMatchObject({ laboratory_id: laboratory.id, working_day_id: workingDay.id });
   });
 
+  it("resolves a 24-row CCDT activity allocation import and preserves laboratory CSV compatibility", () => {
+    const practical={id:"ccdt-course",course_code:"A9021",course_name:"Community Centered Design Thinking",course_type:"PRACTICAL",is_active:true};
+    const labCourse={id:"lab-course",course_code:"A9201",course_name:"Programming Laboratory",course_type:"LABORATORY",is_active:true};
+    const sections=Array.from({length:24},(_,index)=>({...section,id:`ccdt-section-${index+1}`,section_code:`CIV-${String(index+1).padStart(2,"0")}`}));
+    const practicalOfferings=sections.map((item,index)=>({id:`ccdt-offering-${index+1}`,course_id:practical.id,section_id:item.id,academic_term_id:term.id,course_type:"PRACTICAL",is_active:true}));
+    const labOffering={id:"lab-offering",course_id:labCourse.id,section_id:sections[0].id,academic_term_id:term.id,course_type:"LABORATORY",is_active:true};
+    const activityLookups={...lookups,"/courses":[course,practical,labCourse],"/sections":sections,"/course-offerings":[...practicalOfferings,labOffering]};
+    const rows=sections.map((item)=>resolveCsvImportRow(masterConfigs["laboratory-allocations"],{course_code:"A9021",section_code:String(item.section_code),academic_term_code:"2026-27 | I-I",faculty_code:"VCE042",role_type:"MAIN",required_main_faculty_code:"",alternative_group_code:"",minimum_sessions_per_week:"1",maximum_sessions_per_week:"1",is_active:"TRUE"},activityLookups));
+    expect(rows).toHaveLength(24);expect(rows.every((row)=>row.errors.length===0)).toBe(true);expect(new Set(rows.map((row)=>row.payload.course_offering_id)).size).toBe(24);expect(rows.every((row)=>row.payload.faculty_id===faculty.id)).toBe(true);
+    const legacyLab=resolveCsvImportRow(masterConfigs["laboratory-allocations"],{course_code:"A9201",section_code:String(sections[0].section_code),academic_term_code:"2026-27 | I-I",faculty_code:"VCE042",role_type:"MAIN"},activityLookups);
+    expect(legacyLab.errors).toEqual([]);expect(legacyLab.payload.course_offering_id).toBe(labOffering.id);
+    const wrong=resolveCsvImportRow(masterConfigs["laboratory-allocations"],{course_code:"CS301",section_code:String(sections[0].section_code),academic_term_code:"2026-27 | I-I",faculty_code:"VCE042",role_type:"MAIN"},{...activityLookups,"/course-offerings":[...activityLookups["/course-offerings"],{...offering,section_id:sections[0].id}]});
+    expect(wrong.errors.join(" ")).toContain("only laboratory or practical");
+  });
+
   it("reports unknown, inactive, and ambiguous business keys at row level", () => {
     const unknown = resolveCsvImportRow(masterConfigs.programs, { department_code: "BAD", program_code: "BAD-UG", program_name: "Bad", degree_type: "UG", duration_years: "4" }, lookups);
     expect(unknown.errors.join(" ")).toContain("Unknown department reference 'BAD'");
@@ -86,6 +101,7 @@ describe("readable CSV import resolution", () => {
     expect(csvTemplateColumns(masterConfigs["student-batches"])).toContain("student_group_name");
     expect(csvTemplateColumns(masterConfigs["student-batches"])).not.toContain("batch_name");
     expect(csvTemplateColumns(masterConfigs.laboratories)).toEqual(expect.arrayContaining(["availability_mode", "academic_term_code", "blocked_periods", "allowed_periods"]));
+    expect(csvTemplateColumns(masterConfigs["laboratory-allocations"])).toEqual(["course_code","section_code","academic_term_code","faculty_code","role_type","required_main_faculty_code","alternative_group_code","minimum_sessions_per_week","maximum_sessions_per_week","is_active"]);
   });
 
   it("resolves compact blocked and selected laboratory periods without UUID columns", () => {

@@ -15,6 +15,7 @@ from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.facilities.models import Classroom, Laboratory
 from app.modules.faculty.models import Faculty
 from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation, TheoryFacultyAllocation
+from app.modules.faculty_allocations.eligibility import uses_activity_faculty_allocations
 from app.modules.sections.models import Section
 from .models import CombinedTeachingGroup, CombinedTeachingGroupMember
 from .repository import combined_teaching_repository
@@ -54,7 +55,7 @@ class CombinedTeachingService:
         effective = {row.weekly_periods_override or course.weekly_periods for row in offerings}
         if len(effective) != 1 or next(iter(effective)) != course.session_duration * course.sessions_per_week:
             raise HTTPException(422, "COMBINED_TEACHING_SESSION_MISMATCH: weekly and session patterns must match")
-        allocation_model = LaboratoryFacultyAllocation if course.course_type == "LABORATORY" else TheoryFacultyAllocation
+        allocation_model = LaboratoryFacultyAllocation if uses_activity_faculty_allocations(course) else TheoryFacultyAllocation
         allocation_filters = [allocation_model.course_offering_id.in_(ids), allocation_model.faculty_id == faculty.id, allocation_model.is_active.is_(True)]
         if allocation_model is LaboratoryFacultyAllocation:
             allocation_filters.append(LaboratoryFacultyAllocation.role_type == "MAIN")

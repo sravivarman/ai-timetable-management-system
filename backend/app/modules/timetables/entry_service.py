@@ -11,6 +11,7 @@ from app.modules.courses.models import Course
 from app.modules.facilities.models import Classroom,Laboratory
 from app.modules.faculty.models import Faculty
 from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation
+from app.modules.faculty_allocations.eligibility import uses_activity_faculty_allocations
 from app.modules.resource_availability.service import availability_service
 from app.modules.laboratory_batches.models import LaboratoryBatchConfiguration,LaboratoryRotationAssignment,LaboratoryRotationBlock,StudentBatch
 from app.modules.schedule_configuration.models import PeriodTiming,WorkingDay
@@ -56,8 +57,9 @@ class TimetableEntryService:
   faculty_for_constraints=data.faculty_id
   if data.laboratory_faculty_allocation_id:
    allocation=db.scalar(select(LaboratoryFacultyAllocation).where(LaboratoryFacultyAllocation.id==data.laboratory_faculty_allocation_id))
-   if not allocation or not allocation.is_active or allocation.course_offering_id!=offering.id:raise HTTPException(422,"Laboratory faculty allocation must be active and belong to the offering")
-   if data.faculty_id and data.faculty_id!=allocation.faculty_id:raise HTTPException(422,"Faculty does not match laboratory allocation")
+   if not allocation or not allocation.is_active or allocation.course_offering_id!=offering.id:raise HTTPException(422,"Activity faculty allocation must be active and belong to the offering")
+   if data.faculty_id and data.faculty_id!=allocation.faculty_id:raise HTTPException(422,"Faculty does not match activity allocation")
+   if not uses_activity_faculty_allocations(course):raise HTTPException(422,"Activity faculty allocation may be used only for laboratory or practical offerings")
    faculty_for_constraints=allocation.faculty_id
   if faculty_for_constraints:
    faculty=db.scalar(select(Faculty).where(Faculty.id==faculty_for_constraints))
@@ -73,7 +75,8 @@ class TimetableEntryService:
    if laboratory.id not in effective_ids:raise HTTPException(422,"Laboratory must be permitted by the course offering")
 
   if data.session_length!=course.session_duration:raise HTTPException(422,"Session length must match the course session pattern")
-  if course.course_type in {"THEORY","CDC","PRACTICAL"} and not data.faculty_id:raise HTTPException(422,"The academic activity requires an assigned faculty member")
+  if course.course_type in {"THEORY","CDC"} and not data.faculty_id:raise HTTPException(422,"The academic activity requires an assigned faculty member")
+  if uses_activity_faculty_allocations(course) and not faculty_for_constraints:raise HTTPException(422,"The laboratory or practical activity requires an assigned faculty member")
   if course.venue_requirement=="CLASSROOM_ONLY" and (not data.classroom_id or data.laboratory_id):raise HTTPException(422,"CLASSROOM_ONLY requires a classroom and cannot use a laboratory")
   if course.venue_requirement=="LABORATORY_ONLY" and (not data.laboratory_id or data.classroom_id):raise HTTPException(422,"LABORATORY_ONLY requires a laboratory and cannot use a classroom")
   if course.venue_requirement=="CLASSROOM_OR_LABORATORY" and bool(data.classroom_id)==bool(data.laboratory_id):raise HTTPException(422,"CLASSROOM_OR_LABORATORY requires exactly one classroom or laboratory")

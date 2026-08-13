@@ -11,6 +11,7 @@ from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.facilities_constraints.models import SectionClassroomAssignment
 from app.modules.faculty.models import Faculty
 from app.modules.faculty_allocations.models import TheoryFacultyAllocation, LaboratoryFacultyAllocation
+from app.modules.faculty_allocations.eligibility import uses_activity_faculty_allocations
 from app.modules.faculty_allocations.workload import configured_faculty_workloads
 from app.modules.faculty_scheduling.models import FacultyAvailability
 from app.modules.schedule_configuration.models import WorkingDay
@@ -103,7 +104,7 @@ def validate(db, request):
      elif restricted.owning_department_id!=course.offering_department_id and not restricted.is_shareable_across_departments:add("LABORATORY_NOT_SHAREABLE","Restricted cross-department laboratory is not shareable","course_offering",offering.id)
     candidate_laboratories=resolve_effective_laboratories(db,course,offering)
     if candidate_laboratories and all(any(code=="RESOURCE_NO_AVAILABLE_PERIODS" for code,_,_ in availability_service.validate(db,"LABORATORY",laboratory.id,request.academic_term_id)) for laboratory in candidate_laboratories if laboratory):add("NO_AVAILABLE_ELIGIBLE_LABORATORY","No eligible laboratory has any available instructional period","course_offering",offering.id)
-   if course and course.course_type in {"THEORY","CDC","PRACTICAL"}:
+   if course and not uses_activity_faculty_allocations(course):
     executed+=1
     allocations=list(db.scalars(select(TheoryFacultyAllocation).where(TheoryFacultyAllocation.course_offering_id==offering.id,TheoryFacultyAllocation.is_active.is_(True))))
     if not allocations:add("THEORY_FACULTY_MISSING" if course.course_type=="THEORY" else "FACULTY_ALLOCATION_MISSING","Offering has no active faculty allocation","course_offering",offering.id)
@@ -111,15 +112,15 @@ def validate(db, request):
     for allocation in allocations:
      faculty=db.scalar(select(Faculty).where(Faculty.id==allocation.faculty_id))
      if not faculty or not faculty.is_active:add("FACULTY_INACTIVE","Allocated faculty is inactive","faculty",allocation.faculty_id)
-   if course and course.course_type=="LABORATORY":
+   if course and uses_activity_faculty_allocations(course):
     executed+=4
     allocations=list(db.scalars(select(LaboratoryFacultyAllocation).where(LaboratoryFacultyAllocation.course_offering_id==offering.id,LaboratoryFacultyAllocation.role_type=="MAIN",LaboratoryFacultyAllocation.is_active.is_(True))))
-    if not allocations:add("LAB_MAIN_FACULTY_MISSING","Laboratory offering has no active MAIN faculty allocation","course_offering",offering.id)
+    if not allocations:add("LAB_MAIN_FACULTY_MISSING" if course.course_type=="LABORATORY" else "FACULTY_ALLOCATION_MISSING","Activity offering has no active MAIN faculty allocation","course_offering",offering.id)
     for allocation in allocations:
      faculty=db.scalar(select(Faculty).where(Faculty.id==allocation.faculty_id))
      if not faculty or not faculty.is_active:add("FACULTY_INACTIVE","Allocated faculty is inactive","faculty",allocation.faculty_id)
-    if course.grouping_mode=="GROUPED" and not cfg:add("BATCH_CONFIGURATION_MISSING","Laboratory offering has no active batch configuration","course_offering",offering.id)
-    if cfg and course.default_lab_group_count is not None:
+    if course.grouping_mode=="GROUPED" and not cfg:add("BATCH_CONFIGURATION_MISSING","Grouped activity offering has no active student-group configuration","course_offering",offering.id)
+    if course.course_type=="LABORATORY" and cfg and course.default_lab_group_count is not None:
      executed+=1
      if cfg.number_of_groups!=course.default_lab_group_count:
       warn("LAB_BATCH_COUNT_OVERRIDE","Offering-specific laboratory group count overrides the course default","course_offering",offering.id,{"course_default_lab_group_count":course.default_lab_group_count,"effective_lab_group_count":cfg.number_of_groups})
@@ -149,7 +150,7 @@ def validate(db, request):
   if any(not section or not section.student_strength or section.student_strength<=0 for section in member_sections):add("COMBINED_TEACHING_SECTION_STRENGTH_MISSING","Every participating section requires positive strength","combined_teaching_group",group.id)
   course=db.get(Course,group.course_id);effective={offering.weekly_periods_override or course.weekly_periods for offering in member_offerings if offering and course}
   if not course or len(effective)!=1 or next(iter(effective),0)!=course.session_duration*course.sessions_per_week:add("COMBINED_TEACHING_SESSION_MISMATCH","Combined offerings require one compatible complete session pattern","combined_teaching_group",group.id)
-  allocation_model=LaboratoryFacultyAllocation if course and course.course_type=="LABORATORY" else TheoryFacultyAllocation
+  allocation_model=LaboratoryFacultyAllocation if course and uses_activity_faculty_allocations(course) else TheoryFacultyAllocation
   allocated={offering.id for offering in member_offerings if offering and db.scalar(select(allocation_model.id).where(allocation_model.course_offering_id==offering.id,allocation_model.faculty_id==group.faculty_id,allocation_model.is_active.is_(True),*((allocation_model.role_type=="MAIN",) if allocation_model is LaboratoryFacultyAllocation else ())))}
   if not group.faculty_id:add("COMBINED_TEACHING_FACULTY_MISSING","Combined teaching requires faculty","combined_teaching_group",group.id)
   elif allocated!={offering.id for offering in member_offerings if offering}:add("COMBINED_TEACHING_FACULTY_MISMATCH","Combined faculty must be allocated to every offering","combined_teaching_group",group.id)

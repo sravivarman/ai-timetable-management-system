@@ -12,7 +12,8 @@ from app.modules.course_offerings.laboratories import resolve_effective_laborato
 from app.modules.courses.models import Course
 from app.modules.facilities.models import Laboratory
 from app.modules.faculty.models import Faculty
-from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation, TheoryFacultyAllocation
+from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation
+from app.modules.faculty_allocations.eligibility import uses_activity_faculty_allocations
 from app.modules.laboratory_batches.models import (
     LaboratoryBatchConfiguration,
     LaboratoryRotationAssignment,
@@ -169,10 +170,10 @@ class Service:
             course = courses[offering.id]
             fixed_id = offering.laboratory_override_id if offering.laboratory_selection_mode == "FIXED" else None
             laboratory = db.get(Laboratory, fixed_id) if fixed_id else None
-            if course.course_type == "LABORATORY":
+            if uses_activity_faculty_allocations(course):
                 main = db.scalar(select(LaboratoryFacultyAllocation).where(LaboratoryFacultyAllocation.course_offering_id == offering.id, LaboratoryFacultyAllocation.role_type == "MAIN", LaboratoryFacultyAllocation.is_active.is_(True)).order_by(LaboratoryFacultyAllocation.id))
             else:
-                main = db.scalar(select(TheoryFacultyAllocation).where(TheoryFacultyAllocation.course_offering_id == offering.id, TheoryFacultyAllocation.is_active.is_(True)).order_by(TheoryFacultyAllocation.id))
+                main = None
             eligible_ids = {item.id for item in resolve_effective_laboratories(db, course, offering)}
             if not eligible_ids or (laboratory and laboratory.id not in eligible_ids) or not main:
                 raise HTTPException(422, "Every rotation offering requires eligible laboratories and a MAIN faculty allocation")

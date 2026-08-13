@@ -11,6 +11,7 @@ from app.modules.course_offerings.models import CourseOffering
 from app.modules.courses.models import Course
 from app.modules.faculty.models import Faculty
 from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation, LaboratorySessionFacultyRule, TheoryFacultyAllocation
+from app.modules.faculty_allocations.eligibility import uses_activity_faculty_allocations
 from app.modules.faculty_allocations.repositories import AllocationRepository
 from app.modules.faculty_allocations.schemas import AllocationPage, LaboratoryAllocationCreate, LaboratoryAllocationUpdate, LaboratorySessionRuleCreate, LaboratorySessionRuleUpdate, TheoryAllocationCreate, TheoryAllocationUpdate, WorkloadPreviewItem
 from app.modules.programs.models import Program
@@ -43,15 +44,16 @@ class FacultyAllocationService:
         return self.repository.save(db, item)
 
     def create_laboratory(self, db: Session, payload: LaboratoryAllocationCreate):
-        data = payload.model_dump(); self._validate_offering_and_faculty(db, data["course_offering_id"], data["faculty_id"], "LABORATORY")
+        data = payload.model_dump(); self._validate_offering_and_faculty(db, data["course_offering_id"], data["faculty_id"], "ACTIVITY")
         self._validate_lab_data(db, data)
         existing = db.scalar(select(LaboratoryFacultyAllocation).where(LaboratoryFacultyAllocation.course_offering_id == data["course_offering_id"], LaboratoryFacultyAllocation.faculty_id == data["faculty_id"], LaboratoryFacultyAllocation.is_active.is_(True)))
-        if existing: raise HTTPException(409, "Faculty is already allocated to this laboratory offering")
+        if existing: raise HTTPException(409, "Faculty is already allocated to this activity offering")
         return self.repository.save(db, LaboratoryFacultyAllocation(**data))
 
     def update_laboratory(self, db: Session, item_id: UUID, payload: LaboratoryAllocationUpdate):
         item = self.get(db, LaboratoryFacultyAllocation, item_id); changes = payload.model_dump(exclude_unset=True)
         data = {column.name: getattr(item, column.name) for column in LaboratoryFacultyAllocation.__table__.columns if column.name not in {"id", "is_active", "created_at", "updated_at"}}; data.update(changes)
+        self._validate_offering_and_faculty(db, item.course_offering_id, item.faculty_id, "ACTIVITY")
         self._validate_lab_data(db, data, exclude_id=item.id)
         if item.role_type == "MAIN" and data["role_type"] != "MAIN": self._ensure_not_last_main(db, item)
         for name, value in changes.items(): setattr(item, name, value)
@@ -59,7 +61,7 @@ class FacultyAllocationService:
 
     def create_rule(self, db: Session, payload: LaboratorySessionRuleCreate):
         allocation = self.get(db, LaboratoryFacultyAllocation, payload.laboratory_faculty_allocation_id)
-        if not allocation.is_active: raise HTTPException(422, "Laboratory faculty allocation must be active")
+        if not allocation.is_active: raise HTTPException(422, "Activity faculty allocation must be active")
         if db.scalar(select(LaboratorySessionFacultyRule).where(LaboratorySessionFacultyRule.laboratory_faculty_allocation_id == payload.laboratory_faculty_allocation_id, LaboratorySessionFacultyRule.session_number == payload.session_number)):
             raise HTTPException(409, "A rule already exists for this allocation and session")
         return self.repository.save(db, LaboratorySessionFacultyRule(**payload.model_dump()))
@@ -81,7 +83,7 @@ class FacultyAllocationService:
             conflict = db.scalar(select(TheoryFacultyAllocation).where(TheoryFacultyAllocation.course_offering_id == item.course_offering_id, TheoryFacultyAllocation.is_active.is_(True), TheoryFacultyAllocation.id != item.id))
             if conflict: raise HTTPException(409, "A theory offering already has an active faculty allocation")
         elif model is LaboratoryFacultyAllocation:
-            self._validate_offering_and_faculty(db, item.course_offering_id, item.faculty_id, "LABORATORY")
+            self._validate_offering_and_faculty(db, item.course_offering_id, item.faculty_id, "ACTIVITY")
         item.is_active = True; return self.repository.save(db, item)
 
     def preview(self, db: Session, *, faculty_id: UUID | None, academic_term_id: UUID | None, department_id: UUID | None) -> list[WorkloadPreviewItem]:
@@ -99,10 +101,11 @@ class FacultyAllocationService:
         if not offering or not offering.is_active: raise HTTPException(422, "Course offering must exist and be active")
         if not faculty or not faculty.is_active: raise HTTPException(422, "Faculty must exist and be active")
         course = db.scalar(select(Course).where(Course.id == offering.course_id))
-        eligible = course and (course.course_type == "LABORATORY" if expected_type == "LABORATORY" else course.course_type != "LABORATORY")
+        eligible = course and (uses_activity_faculty_allocations(course) if expected_type == "ACTIVITY" else not uses_activity_faculty_allocations(course))
         if not eligible:
-            label = "non-laboratory" if expected_type == "THEORY" else "laboratory"
-            raise HTTPException(422, f"Allocation is allowed only for {label} course offerings")
+            if expected_type == "ACTIVITY":
+                raise HTTPException(422, "Activity faculty allocation is allowed only for laboratory or practical course offerings")
+            raise HTTPException(422, "Theory faculty allocation is not allowed for laboratory or practical course offerings")
 
     def _validate_lab_data(self, db: Session, data: dict, exclude_id: UUID | None = None) -> None:
         if data.get("required_with_main_faculty_id"):
@@ -114,7 +117,7 @@ class FacultyAllocationService:
     @staticmethod
     def _ensure_not_last_main(db: Session, item: LaboratoryFacultyAllocation) -> None:
         mains = db.scalar(select(func.count()).select_from(LaboratoryFacultyAllocation).where(LaboratoryFacultyAllocation.course_offering_id == item.course_offering_id, LaboratoryFacultyAllocation.role_type == "MAIN", LaboratoryFacultyAllocation.is_active.is_(True))) or 0
-        if mains <= 1: raise HTTPException(422, "A laboratory offering must retain at least one active MAIN faculty allocation")
+        if mains <= 1: raise HTTPException(422, "An activity offering must retain at least one active MAIN faculty allocation")
 
 
 faculty_allocation_service = FacultyAllocationService()

@@ -277,6 +277,27 @@ class SolverInputBuilderTests(unittest.TestCase):
         hashes.append(self.client.post(url, headers=self.ctx.headers["administrator"]).json()["input_hash"])
         self.assertEqual(len(set(hashes)), 4)
 
+    def test_practical_activity_allocation_is_snapshotted_and_changes_hash(self):
+        db = self.ctx.session_factory()
+        try:
+            practical = Course(course_code="A9021", course_name="Community Centered Design Thinking", offering_department_id=self.ctx.active_department.id, course_type="PRACTICAL", weekly_periods=3, grouping_mode="GROUPED", default_group_count=3, session_duration=3, sessions_per_week=1, venue_requirement="CLASSROOM_ONLY", counts_toward_workload=True)
+            replacement = Faculty(faculty_code="TST002", full_name="Replacement Faculty", department_id=self.ctx.active_department.id, designation="Assistant Professor", institutional_email="replacement.faculty@vce.ac.in", minimum_weekly_workload=0, maximum_weekly_workload=18)
+            db.add_all([practical,replacement]);db.flush()
+            offering=CourseOffering(course_id=practical.id,section_id=self.section.id,academic_term_id=self.term.id);db.add(offering);db.flush()
+            allocation=LaboratoryFacultyAllocation(course_offering_id=offering.id,faculty_id=self.faculty.id,role_type="MAIN",minimum_sessions_per_week=1,maximum_sessions_per_week=1)
+            db.add_all([allocation,LaboratoryBatchConfiguration(course_offering_id=offering.id,section_id=self.section.id,number_of_groups=3)]);db.commit()
+            offering_id,allocation_id,replacement_id=offering.id,allocation.id,replacement.id
+        finally:db.close()
+        url=f"/api/v1/timetable-versions/{self.version.id}/build-solver-input"
+        first=self.client.post(url,headers=self.ctx.headers["administrator"]);self.assertEqual(first.status_code,201,first.text)
+        snapshot=first.json()["snapshot_json"]
+        self.assertTrue(any(item["course_offering_id"]==str(offering_id) and item["faculty_id"]==str(self.faculty.id) and item["role_type"]=="MAIN" for item in snapshot["laboratory_faculty_allocations"]))
+        self.assertFalse(any(item["course_offering_id"]==str(offering_id) for item in snapshot["theory_faculty_allocations"]))
+        db=self.ctx.session_factory()
+        try:db.get(LaboratoryFacultyAllocation,allocation_id).faculty_id=replacement_id;db.commit()
+        finally:db.close()
+        second=self.client.post(url,headers=self.ctx.headers["administrator"]);self.assertNotEqual(first.json()["input_hash"],second.json()["input_hash"])
+
     def test_build_eligibility_rejections(self):
         db = self.ctx.session_factory()
         try:

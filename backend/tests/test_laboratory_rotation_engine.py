@@ -108,7 +108,7 @@ class LaboratoryRotationEngineTests(unittest.TestCase):
             db.add(course); db.flush()
             offering = CourseOffering(course_id=course.id, section_id=self.fixture.section.id, academic_term_id=self.fixture.term.id)
             db.add(offering); db.flush()
-            db.add_all([CourseEligibleLaboratory(course_id=course.id, laboratory_id=laboratory.id), LaboratoryBatchConfiguration(course_offering_id=offering.id, section_id=self.fixture.section.id, number_of_groups=group_count), TheoryFacultyAllocation(course_offering_id=offering.id, faculty_id=faculty.id)])
+            db.add_all([CourseEligibleLaboratory(course_id=course.id, laboratory_id=laboratory.id), LaboratoryBatchConfiguration(course_offering_id=offering.id, section_id=self.fixture.section.id, number_of_groups=group_count), LaboratoryFacultyAllocation(course_offering_id=offering.id, faculty_id=faculty.id, role_type="MAIN")])
             db.commit()
             return offering.id
         finally:
@@ -276,3 +276,12 @@ class LaboratoryRotationEngineTests(unittest.TestCase):
         matrix = self._generate([self.fixture.lab_offering.id, practical], "LAB-PRACTICAL")
         self.assertEqual(len(matrix["blocks"]), 2)
         self.assertEqual(len({(row.batch_id, row.course_offering_id) for block in matrix["blocks"] for row in block["assignments"]}), 4)
+        build=self.fixture.client.post(f"/api/v1/timetable-versions/{self.fixture.version.id}/build-solver-input",headers=self.ctx.headers["administrator"]);self.assertEqual(build.status_code,201,build.text)
+        practical_allocations={item["id"] for item in build.json()["snapshot_json"]["laboratory_faculty_allocations"] if item["course_offering_id"]==str(practical)}
+        self.assertEqual(len(practical_allocations),1)
+        solve=self.fixture.client.post(f"/api/v1/timetable-versions/{self.fixture.version.id}/solve",json={"time_limit_seconds":10,"random_seed":1},headers=self.ctx.headers["administrator"]);self.assertIn(solve.json()["status"],{"FEASIBLE","OPTIMAL"},solve.text)
+        db=self.ctx.session_factory()
+        try:
+            entries=list(db.scalars(select(TimetableEntry).where(TimetableEntry.course_offering_id==practical)))
+            self.assertEqual(len(entries),2);self.assertTrue(all(entry.entry_type=="PRACTICAL" and str(entry.laboratory_faculty_allocation_id) in practical_allocations for entry in entries))
+        finally:db.close()

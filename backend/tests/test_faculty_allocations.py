@@ -28,6 +28,7 @@ from app.modules.course_offerings.models import CourseOffering
 from app.modules.courses.models import Course
 from app.modules.departments.models import Department
 from app.modules.faculty.models import Faculty
+from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation
 from app.modules.faculty_allocations.schemas import LaboratoryAllocationCreate, LaboratorySessionRuleCreate, TheoryAllocationCreate
 from app.modules.faculty_allocations.services import FacultyAllocationService
 from app.modules.laboratory_batches.models import LaboratoryBatchConfiguration
@@ -46,13 +47,15 @@ class FacultyAllocationServiceTests(unittest.TestCase):
         section = Section(program_id=program.id, academic_term_id=term.id, section_name="A", section_code="CSE-A", student_strength=60)
         theory = Course(course_code="A9001", course_name="Mathematics", offering_department_id=department.id, course_type="THEORY", weekly_periods=4, counts_toward_workload=True)
         lab = Course(course_code="A9201", course_name="Programming Lab", offering_department_id=department.id, course_type="LABORATORY", weekly_periods=3, counts_toward_workload=True)
+        practical = Course(course_code="A9021", course_name="Community Centered Design Thinking", offering_department_id=department.id, course_type="PRACTICAL", weekly_periods=3, grouping_mode="GROUPED", default_group_count=2, session_duration=3, sessions_per_week=1, venue_requirement="CLASSROOM_ONLY", counts_toward_workload=True)
         faculty1 = Faculty(faculty_code="VCE001", full_name="Faculty One", department_id=department.id, designation="Assistant Professor", institutional_email="one@vce.ac.in", maximum_weekly_workload=20)
         faculty2 = Faculty(faculty_code="VCE002", full_name="Faculty Two", department_id=department.id, designation="Assistant Professor", institutional_email="two@vce.ac.in", maximum_weekly_workload=20)
-        self.db.add_all([section, theory, lab, faculty1, faculty2]); self.db.flush()
+        self.db.add_all([section, theory, lab, practical, faculty1, faculty2]); self.db.flush()
         self.theory_offering = CourseOffering(course_id=theory.id, section_id=section.id, academic_term_id=term.id)
         self.lab_offering = CourseOffering(course_id=lab.id, section_id=section.id, academic_term_id=term.id)
-        self.db.add_all([self.theory_offering, self.lab_offering]); self.db.commit()
-        self.faculty1, self.faculty2, self.term, self.department = faculty1, faculty2, term, department; self.service = FacultyAllocationService()
+        self.practical_offering = CourseOffering(course_id=practical.id, section_id=section.id, academic_term_id=term.id)
+        self.db.add_all([self.theory_offering, self.lab_offering, self.practical_offering]); self.db.commit()
+        self.faculty1, self.faculty2, self.term, self.department, self.program = faculty1, faculty2, term, department, program; self.service = FacultyAllocationService()
 
     def tearDown(self): self.db.close(); self.engine.dispose()
 
@@ -84,6 +87,30 @@ class FacultyAllocationServiceTests(unittest.TestCase):
         preview = {item.faculty_id: item.weekly_workload_hours for item in self.service.preview(self.db, faculty_id=None, academic_term_id=self.term.id, department_id=self.department.id)}
         self.assertEqual(lab.weekly_periods, 3)
         self.assertEqual(preview[self.faculty2.id], 6)
+
+    def test_practical_uses_rich_activity_allocations_roles_dependencies_and_workload(self):
+        self.db.add(LaboratoryBatchConfiguration(course_offering_id=self.practical_offering.id, section_id=self.practical_offering.section_id, number_of_groups=2)); self.db.commit()
+        main = self.service.create_laboratory(self.db, LaboratoryAllocationCreate(course_offering_id=self.practical_offering.id, faculty_id=self.faculty1.id, role_type="MAIN", minimum_sessions_per_week=1, maximum_sessions_per_week=1))
+        supporting = self.service.create_laboratory(self.db, LaboratoryAllocationCreate(course_offering_id=self.practical_offering.id, faculty_id=self.faculty2.id, role_type="SUPPORTING", required_with_main_faculty_id=self.faculty1.id, alternative_group_code="CCDT-SUPPORT", minimum_sessions_per_week=1, maximum_sessions_per_week=1))
+        self.assertEqual((main.role_type, supporting.required_with_main_faculty_id, supporting.alternative_group_code), ("MAIN", self.faculty1.id, "CCDT-SUPPORT"))
+        preview = {item.faculty_id: item.weekly_workload_hours for item in self.service.preview(self.db, faculty_id=None, academic_term_id=self.term.id, department_id=self.department.id)}
+        self.assertEqual(preview[self.faculty1.id], 6)
+        self.assertEqual(preview[self.faculty2.id], 6)
+        with self.assertRaises(HTTPException) as activity_theory:
+            self.service.create_laboratory(self.db, LaboratoryAllocationCreate(course_offering_id=self.theory_offering.id, faculty_id=self.faculty1.id, role_type="MAIN"))
+        self.assertIn("laboratory or practical", activity_theory.exception.detail)
+        with self.assertRaises(HTTPException):
+            self.service.create_theory(self.db, TheoryAllocationCreate(course_offering_id=self.practical_offering.id, faculty_id=self.faculty1.id))
+
+    def test_ccdt_twenty_four_section_allocations_are_all_accepted(self):
+        offerings=[self.practical_offering]
+        for index in range(2,25):
+            section=Section(program_id=self.program.id,academic_term_id=self.term.id,section_name=str(index),section_code=f"CCDT-{index:02d}",student_strength=60)
+            self.db.add(section);self.db.flush();offering=CourseOffering(course_id=self.practical_offering.course_id,section_id=section.id,academic_term_id=self.term.id);self.db.add(offering);self.db.flush();offerings.append(offering)
+        self.db.commit()
+        rows=[self.service.create_laboratory(self.db,LaboratoryAllocationCreate(course_offering_id=offering.id,faculty_id=self.faculty1.id,role_type="MAIN",minimum_sessions_per_week=1,maximum_sessions_per_week=1)) for offering in offerings]
+        self.assertEqual(len(rows),24)
+        self.assertEqual(self.db.query(LaboratoryFacultyAllocation).filter(LaboratoryFacultyAllocation.course_offering_id.in_([offering.id for offering in offerings]),LaboratoryFacultyAllocation.is_active.is_(True)).count(),24)
 
     def test_demo_seed_is_idempotent(self):
         original_seed, original_cleanup = seed_demo.SessionLocal, cleanup_demo.SessionLocal

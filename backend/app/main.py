@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.common.import_safety import import_baseline_middleware
 from app.modules.authentication.router import router as authentication_router
 from app.modules.academic_terms.router import router as academic_terms_router
 from app.modules.departments.router import router as departments_router
@@ -53,6 +54,7 @@ def create_application() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.middleware("http")(import_baseline_middleware)
 
     @application.get("/", tags=["Root"])
     async def root() -> dict[str, str]:

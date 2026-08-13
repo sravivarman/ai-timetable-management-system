@@ -113,6 +113,20 @@ describe("master record form", () => {
     expect(close).not.toHaveBeenCalled();
   });
 
+  it("offers laboratory and practical activities but not theory in Activity Faculty Allocations", async () => {
+    const user=userEvent.setup();
+    renderWithProviders(<MasterRecordForm config={masterConfigs["laboratory-allocations"]} lookupRecords={{ "/course-offerings": [
+      { id:"lab-offering",course_type:"LABORATORY",display_label:"A9201 - Programming Laboratory (2026-27 I-I • CSE-A)" },
+      { id:"ccdt-offering",course_type:"PRACTICAL",display_label:"A9021 - Community Centered Design Thinking (2026-27 I-I • CIV-A)" },
+      { id:"theory-offering",course_type:"THEORY",display_label:"A9001 - Mathematics (2026-27 I-I • CSE-A)" },
+    ], "/faculty": [{ id:"faculty-1",faculty_code:"VCE1870",full_name:"CCDT Faculty" }] }} mode="create" busy={false} onClose={vi.fn()} onSubmit={vi.fn()} />);
+    await user.click(screen.getByRole("combobox",{name:"Course offering *"}));
+    expect(screen.getByRole("option",{name:/A9201.*Programming Laboratory/})).toBeInTheDocument();
+    expect(screen.getByRole("option",{name:/A9021.*Community Centered Design Thinking/})).toBeInTheDocument();
+    expect(screen.queryByRole("option",{name:/A9001.*Mathematics/})).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent("ccdt-offering");
+  });
+
   it("uses explicit laboratory availability modes instead of an ambiguous checkbox", () => {
     renderWithProviders(<MasterRecordForm config={masterConfigs.laboratories} lookupRecords={{ "/departments": [] }} mode="create" busy={false} onClose={vi.fn()} onSubmit={vi.fn()} />);
     expect(screen.getByRole("radio", { name: "Available all instructional periods" })).toBeChecked();
