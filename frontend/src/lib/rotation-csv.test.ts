@@ -1,0 +1,12 @@
+import { describe, expect, it } from "vitest";
+import { resolveRotationCsvRow, rotationAssignmentCsvColumns } from "@/lib/rotation-csv";
+import type { RotationMatrix } from "@/lib/master-data-api";
+
+const matrix: RotationMatrix = { group: { id: "rotation", rotation_code: "CSE-ROT", section_id: "section", academic_term_id: "term" }, student_group_ids: ["batch"], course_offering_ids: ["offering"], blocks: [{ id: "block", rotation_group_id: "rotation", block_number: 1, assignments: [] }] };
+const records = { "/sections": [{ id: "section", section_code: "CSE-A", is_active: true }], "/academic-terms": [{ id: "term", academic_year: "2026-27", term_name: "I-I", is_active: true }], "/student-batches": [{ id: "batch", section_id: "section", batch_name: "A1", sequence_number: 1, is_active: true }], "/courses": [{ id: "course", course_code: "CSL1", course_name: "Programming Lab", is_active: true }], "/course-offerings": [{ id: "offering", course_id: "course", section_id: "section", academic_term_id: "term", display_label: "CSL1 - Programming Lab (CSE-A)", is_active: true }], "/laboratories": [{ id: "lab", laboratory_code: "CSE-P1", laboratory_name: "Programming Laboratory", is_active: true }], "/faculty": [{ id: "main", faculty_code: "VCE001", full_name: "Faculty One", is_active: true }, { id: "support", faculty_code: "VCE002", full_name: "Faculty Two", is_active: true }] };
+const source = { section_code: "CSE-A", academic_term_code: "2026-27 | I-I", rotation_code: "CSE-ROT", block_number: "1", student_group_name: "A1", course_code: "CSL1", laboratory_code: "CSE-P1", main_faculty_code: "VCE001", supporting_faculty_codes: "VCE002", session_duration: "2" };
+
+describe("rotation CSV business-key resolution", () => {
+  it("exposes no UUID columns and resolves a complete assignment payload", () => { expect(rotationAssignmentCsvColumns.every((column) => !column.endsWith("_id"))).toBe(true); const resolved = resolveRotationCsvRow(source, matrix, records); expect(resolved.errors).toEqual([]); expect(resolved.payload).toEqual(expect.objectContaining({ rotation_block_id: "block", batch_id: "batch", course_offering_id: "offering", laboratory_id: "lab", main_faculty_id: "main", supporting_faculty_ids: ["support"] })); });
+  it("reports unknown readable keys at row level", () => { const resolved = resolveRotationCsvRow({ ...source, laboratory_code: "UNKNOWN" }, matrix, records); expect(resolved.errors.join(" ")).toContain("Unknown laboratory 'UNKNOWN'"); expect(resolved.payload).toBeUndefined(); });
+});

@@ -1,0 +1,10 @@
+from datetime import datetime
+from uuid import UUID,uuid4
+from sqlalchemy import Boolean,DateTime,ForeignKey,Integer,String,func
+from sqlalchemy.orm import Mapped,mapped_column
+from sqlalchemy.types import Uuid
+from app.db.base import Base
+class Classroom(Base):
+ __tablename__="classrooms";id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),primary_key=True,default=uuid4);room_number:Mapped[str]=mapped_column(String(50),unique=True,index=True);room_name:Mapped[str|None]=mapped_column(String(255));building_name:Mapped[str|None]=mapped_column(String(255));floor_number:Mapped[int|None]=mapped_column(Integer);capacity:Mapped[int|None]=mapped_column(Integer);owning_department_id:Mapped[UUID|None]=mapped_column(Uuid(as_uuid=True),ForeignKey("departments.id",ondelete="SET NULL"));is_primary_classroom:Mapped[bool]=mapped_column(Boolean,default=False);is_shareable:Mapped[bool]=mapped_column(Boolean,default=True);is_active:Mapped[bool]=mapped_column(Boolean,default=True);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now());updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now())
+class Laboratory(Base):
+ __tablename__="laboratories";id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),primary_key=True,default=uuid4);laboratory_code:Mapped[str]=mapped_column(String(50),unique=True,index=True);laboratory_name:Mapped[str]=mapped_column(String(255));room_number:Mapped[str]=mapped_column(String(50),unique=True);owning_department_id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),ForeignKey("departments.id",ondelete="RESTRICT"));is_shareable_across_departments:Mapped[bool]=mapped_column(Boolean,default=True);is_available_all_periods:Mapped[bool]=mapped_column(Boolean,default=True);availability_mode:Mapped[str]=mapped_column(String(24),default="ALL_PERIODS",server_default="ALL_PERIODS",nullable=False);is_active:Mapped[bool]=mapped_column(Boolean,default=True);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now());updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now())

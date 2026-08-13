@@ -1,0 +1,1 @@
+"""Faculty master feature module."""

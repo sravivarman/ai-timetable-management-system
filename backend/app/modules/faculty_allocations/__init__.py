@@ -1,0 +1,1 @@
+"""Faculty allocation eligibility feature."""

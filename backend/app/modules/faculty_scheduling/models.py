@@ -1,0 +1,12 @@
+from datetime import datetime
+from uuid import UUID,uuid4
+from sqlalchemy import Boolean,DateTime,ForeignKey,Integer,String,Text,UniqueConstraint,func
+from sqlalchemy.orm import Mapped,mapped_column
+from sqlalchemy.types import JSON,Uuid
+from app.db.base import Base
+class FacultyAvailability(Base):
+ __tablename__="faculty_availability";__table_args__=(UniqueConstraint("faculty_id","academic_term_id","day_of_week","period_number",name="uq_faculty_availability_slot"),)
+ id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),primary_key=True,default=uuid4);faculty_id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),ForeignKey("faculty.id",ondelete="RESTRICT"),index=True);academic_term_id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),ForeignKey("academic_terms.id",ondelete="RESTRICT"),index=True);day_of_week:Mapped[str]=mapped_column(String(10));period_number:Mapped[int]=mapped_column(Integer);availability_type:Mapped[str]=mapped_column(String(15));reason:Mapped[str|None]=mapped_column(Text);is_active:Mapped[bool]=mapped_column(Boolean,default=True);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now());updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now())
+class FacultySchedulingPolicy(Base):
+ __tablename__="faculty_scheduling_policies";__table_args__=(UniqueConstraint("faculty_id","academic_term_id",name="uq_faculty_term_policy"),)
+ id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),primary_key=True,default=uuid4);faculty_id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),ForeignKey("faculty.id",ondelete="RESTRICT"),index=True);academic_term_id:Mapped[UUID]=mapped_column(Uuid(as_uuid=True),ForeignKey("academic_terms.id",ondelete="RESTRICT"),index=True);maximum_periods_per_day:Mapped[int|None]=mapped_column(Integer);avoid_first_period:Mapped[bool]=mapped_column(Boolean,default=False);avoid_last_period:Mapped[bool]=mapped_column(Boolean,default=False);minimize_idle_gaps:Mapped[bool]=mapped_column(Boolean,default=False);fair_first_last_distribution:Mapped[bool]=mapped_column(Boolean,default=False);preferred_working_days:Mapped[list|None]=mapped_column(JSON);is_active:Mapped[bool]=mapped_column(Boolean,default=True);created_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now());updated_at:Mapped[datetime]=mapped_column(DateTime(timezone=True),server_default=func.now(),onupdate=func.now())

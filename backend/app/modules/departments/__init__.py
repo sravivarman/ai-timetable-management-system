@@ -1,0 +1,1 @@
+"""Department management feature module."""

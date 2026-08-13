@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light; }
+.dark { color-scheme: dark; }
+body { @apply bg-slate-50 text-slate-900 antialiased; }
+.dark body { @apply bg-slate-950 text-slate-100; }
+*:focus-visible { @apply outline-none ring-2 ring-brand-600 ring-offset-2; }
+@layer components {
+  .panel { @apply rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900; }
+  .field { @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus:border-brand-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100; }
+  .label { @apply mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-200; }
+  .button-primary { @apply inline-flex items-center justify-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50; }
+  .button-secondary { @apply inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800; }
+}
+
+@media print {
+  @page { size: landscape; margin: 8mm; }
+  body { background: white !important; color: black !important; font-size: 10pt; }
+  header, aside, nav, .print\:hidden { display: none !important; }
+  main { max-width: none !important; padding: 0 !important; }
+  .panel { border: 0 !important; box-shadow: none !important; padding: 0 !important; }
+  .weekly-grid { width: 100% !important; table-layout: fixed; }
+  .weekly-grid th, .weekly-grid td { break-inside: avoid; padding: 3px !important; }
+  .weekly-grid article { min-height: 54px !important; box-shadow: none !important; }
+}

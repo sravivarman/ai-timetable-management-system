@@ -1,0 +1,16 @@
+"""Create faculty scheduling data and permissions.
+
+Revision ID: 0007
+Revises: 0006
+"""
+from uuid import UUID
+from alembic import op
+import sqlalchemy as sa
+revision="0007";down_revision="0006";branch_labels=None;depends_on=None
+ADMIN=UUID("a71e7ba0-1e43-5c51-9554-72efa7ee3c35");TTC=UUID("6ea2c6f7-5c20-5bda-9832-bfd93e82734f");HOD=UUID("b38de217-e739-55e9-840a-fd568ff18dc5");READ=UUID("e9b49d88-b3d4-5522-b9c6-b9b9661ed35a");MANAGE=UUID("a7dc3d52-e0d4-5e3f-8332-29f7bdb91bc4")
+def upgrade():
+ op.create_table("faculty_availability",sa.Column("id",sa.Uuid(),primary_key=True),sa.Column("faculty_id",sa.Uuid(),nullable=False),sa.Column("academic_term_id",sa.Uuid(),nullable=False),sa.Column("day_of_week",sa.String(10),nullable=False),sa.Column("period_number",sa.Integer(),nullable=False),sa.Column("availability_type",sa.String(15),nullable=False),sa.Column("reason",sa.Text()),sa.Column("is_active",sa.Boolean(),nullable=False),sa.Column("created_at",sa.DateTime(timezone=True),server_default=sa.text("now()")),sa.Column("updated_at",sa.DateTime(timezone=True),server_default=sa.text("now()")),sa.ForeignKeyConstraint(["faculty_id"],["faculty.id"],ondelete="RESTRICT"),sa.ForeignKeyConstraint(["academic_term_id"],["academic_terms.id"],ondelete="RESTRICT"),sa.UniqueConstraint("faculty_id","academic_term_id","day_of_week","period_number",name="uq_faculty_availability_slot"))
+ op.create_table("faculty_scheduling_policies",sa.Column("id",sa.Uuid(),primary_key=True),sa.Column("faculty_id",sa.Uuid(),nullable=False),sa.Column("academic_term_id",sa.Uuid(),nullable=False),sa.Column("maximum_periods_per_day",sa.Integer()),sa.Column("avoid_first_period",sa.Boolean(),nullable=False),sa.Column("avoid_last_period",sa.Boolean(),nullable=False),sa.Column("minimize_idle_gaps",sa.Boolean(),nullable=False),sa.Column("fair_first_last_distribution",sa.Boolean(),nullable=False),sa.Column("preferred_working_days",sa.JSON()),sa.Column("is_active",sa.Boolean(),nullable=False),sa.Column("created_at",sa.DateTime(timezone=True),server_default=sa.text("now()")),sa.Column("updated_at",sa.DateTime(timezone=True),server_default=sa.text("now()")),sa.ForeignKeyConstraint(["faculty_id"],["faculty.id"],ondelete="RESTRICT"),sa.ForeignKeyConstraint(["academic_term_id"],["academic_terms.id"],ondelete="RESTRICT"),sa.UniqueConstraint("faculty_id","academic_term_id",name="uq_faculty_term_policy"))
+ op.bulk_insert(sa.table("permissions",sa.column("id",sa.Uuid()),sa.column("resource",sa.String()),sa.column("action",sa.String()),sa.column("description",sa.Text())),[{"id":READ,"resource":"faculty_availability","action":"read","description":"View faculty availability and policies"},{"id":MANAGE,"resource":"faculty_availability","action":"manage","description":"Manage faculty availability and policies"}]);op.bulk_insert(sa.table("role_permissions",sa.column("role_id",sa.Uuid()),sa.column("permission_id",sa.Uuid())),[{"role_id":ADMIN,"permission_id":READ},{"role_id":ADMIN,"permission_id":MANAGE},{"role_id":TTC,"permission_id":READ},{"role_id":TTC,"permission_id":MANAGE},{"role_id":HOD,"permission_id":READ}])
+def downgrade():
+ op.drop_table("faculty_scheduling_policies");op.drop_table("faculty_availability")
