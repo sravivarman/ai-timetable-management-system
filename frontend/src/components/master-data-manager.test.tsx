@@ -122,10 +122,11 @@ describe("master-data manager", () => {
       { id: "course-auto", course_code: "L1001", course_name: "Automatic Lab", course_type: "LABORATORY", venue_requirement: "LABORATORY_ONLY" },
       { id: "course-preferred", course_code: "L1002", course_name: "Preferred Lab", course_type: "LABORATORY", venue_requirement: "LABORATORY_ONLY" },
       { id: "course-fixed", course_code: "L1003", course_name: "Required Lab", course_type: "LABORATORY", venue_requirement: "LABORATORY_ONLY" },
+      { id: "course-restricted", course_code: "L1004", course_name: "Restricted Lab", course_type: "LABORATORY", venue_requirement: "LABORATORY_ONLY" },
     ];
-    const offerings = courses.map((course, index) => ({ id: `offering-${index}`, course_id: course.id, section_id: "section-1", academic_term_id: "term-1", laboratory_selection_mode: index === 4 ? "PREFERRED" : index === 5 ? "FIXED" : "AUTO", laboratory_override_id: index >= 4 ? "laboratory-1" : null, is_mandatory: true, is_active: true }));
+    const offerings = courses.map((course, index) => ({ id: `offering-${index}`, course_id: course.id, section_id: "section-1", academic_term_id: "term-1", laboratory_selection_mode: index === 4 ? "PREFERRED" : index === 5 ? "FIXED" : index === 6 ? "RESTRICTED" : "AUTO", laboratory_override_id: index === 4 || index === 5 ? "laboratory-1" : null, allowed_laboratory_ids: index === 6 ? ["laboratory-1", "laboratory-2"] : [], is_mandatory: true, is_active: true }));
     vi.mocked(masterDataApi.list).mockResolvedValue({ items: offerings, total: offerings.length, page: 1, page_size: 20, pages: 1 });
-    vi.mocked(masterDataApi.lookup).mockImplementation(async (endpoint) => endpoint === "/courses" ? courses : endpoint === "/sections" ? [{ id: "section-1", display_label: "2026-27 I-I • CIV-A" }] : endpoint === "/academic-terms" ? [{ id: "term-1", academic_year: "2026-27", term_name: "I-I" }] : endpoint === "/laboratories" ? [{ id: "laboratory-1", laboratory_code: "GRAPHICS-1", laboratory_name: "Graphics Lab 1" }] : []);
+    vi.mocked(masterDataApi.lookup).mockImplementation(async (endpoint) => endpoint === "/courses" ? courses : endpoint === "/sections" ? [{ id: "section-1", display_label: "2026-27 I-I • CIV-A" }] : endpoint === "/academic-terms" ? [{ id: "term-1", academic_year: "2026-27", term_name: "I-I" }] : endpoint === "/laboratories" ? [{ id: "laboratory-1", laboratory_code: "GRAPHICS-1", laboratory_name: "Graphics Lab 1" }, { id: "laboratory-2", laboratory_code: "GRAPHICS-2", laboratory_name: "Graphics Lab 2" }] : []);
     renderWithProviders(<MasterDataManager config={masterConfigs["course-offerings"]} module="course-offerings" />);
     const rowForCourse = (pattern: RegExp) => screen.getAllByText(pattern).find((element) => element.tagName === "TD")!.closest("tr")!;
     await screen.findAllByText(/A9001.*Matrices and Calculus/);
@@ -137,7 +138,9 @@ describe("master-data manager", () => {
     expect(within(rowForCourse(/L1001.*Automatic Lab/)).getByText("Any eligible laboratory")).toBeInTheDocument();
     expect(within(rowForCourse(/L1002.*Preferred Lab/)).getByText("Preferred")).toBeInTheDocument();
     expect(within(rowForCourse(/L1003.*Required Lab/)).getByText("Required")).toBeInTheDocument();
-    expect(screen.getAllByText(/GRAPHICS-1.*Graphics Lab 1/)).toHaveLength(2);
+    expect(within(rowForCourse(/L1004.*Restricted Lab/)).getByText("Restricted")).toBeInTheDocument();
+    expect(within(rowForCourse(/L1004.*Restricted Lab/)).getByText(/GRAPHICS-1.*GRAPHICS-2/)).toBeInTheDocument();
+    expect(screen.getAllByText(/GRAPHICS-1.*Graphics Lab 1/)).toHaveLength(3);
     expect(document.body).not.toHaveTextContent("laboratory-1");
   });
 

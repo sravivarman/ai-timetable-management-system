@@ -90,6 +90,16 @@ describe("Master Data business-key CSV export", () => {
     expect(resolved.payload).toMatchObject({ offering_department_id: ids.department, eligible_laboratory_ids: [ids.laboratory], default_laboratory_id: ids.laboratory, course_code: "CS301", is_active: true });
   });
 
+  it("round-trips laboratory capacity concurrency without UUID columns", () => {
+    const shared = { ...laboratory, capacity: 60, concurrent_usage_mode: "CAPACITY_SHARED", availability_mode: "ALL_PERIODS", is_shareable_across_departments: true };
+    const [exported] = serializeMasterDataExport(masterConfigs.laboratories, [shared], lookups);
+    expect(exported).toMatchObject({ laboratory_code: "CSE-LAB-01", capacity: 60, concurrent_usage_mode: "CAPACITY_SHARED", department_code: "CSE" });
+    expect(Object.keys(exported).some((key) => key.endsWith("_id"))).toBe(false);
+    const resolved = resolveCsvImportRow(masterConfigs.laboratories, Object.fromEntries(Object.entries(exported).map(([key, value]) => [key, String(value ?? "")])), lookups);
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.payload).toMatchObject({ owning_department_id: ids.department, capacity: 60, concurrent_usage_mode: "CAPACITY_SHARED" });
+  });
+
   it("round-trips an offering laboratory override without exposing its ID", () => {
     const preferred = { ...offering, laboratory_selection_mode: "PREFERRED", laboratory_override_id: ids.laboratory };
     const [exported] = serializeMasterDataExport(masterConfigs["course-offerings"], [preferred], lookups);
@@ -98,6 +108,19 @@ describe("Master Data business-key CSV export", () => {
     const resolved = resolveCsvImportRow(masterConfigs["course-offerings"], Object.fromEntries(Object.entries(exported).map(([key, value]) => [key, String(value ?? "")])), lookups);
     expect(resolved.errors).toEqual([]);
     expect(resolved.payload).toMatchObject({ laboratory_selection_mode: "PREFERRED", laboratory_override_id: ids.laboratory });
+  });
+
+  it("round-trips a readable restricted offering laboratory set", () => {
+    const second = { id: "lab-2", laboratory_code: "PHY-2", laboratory_name: "Physics Lab 2", is_active: true };
+    const restrictedCourse = { ...course, eligible_laboratory_ids: [ids.laboratory, second.id] };
+    const restricted = { ...offering, laboratory_selection_mode: "RESTRICTED", laboratory_override_id: null, allowed_laboratory_ids: [ids.laboratory, second.id] };
+    const restrictedLookups = { ...lookups, "/courses": [restrictedCourse], "/laboratories": [...lookups["/laboratories"], second], "/course-offerings": [restricted] };
+    const [exported] = serializeMasterDataExport(masterConfigs["course-offerings"], [restricted], restrictedLookups);
+    expect(exported).toMatchObject({ laboratory_selection_mode: "RESTRICTED", laboratory_code: "", allowed_laboratory_codes: "CSE-LAB-01|PHY-2" });
+    expect(Object.keys(exported).some((key) => key.endsWith("_id"))).toBe(false);
+    const resolved = resolveCsvImportRow(masterConfigs["course-offerings"], Object.fromEntries(Object.entries(exported).map(([key, value]) => [key, String(value ?? "")])), restrictedLookups);
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.payload).toMatchObject({ laboratory_selection_mode: "RESTRICTED", laboratory_override_id: null, allowed_laboratory_ids: [ids.laboratory, second.id] });
   });
 
   it("leaves laboratory fields blank for a classroom-only offering and accepts that export on import", () => {

@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.laboratories import resolve_effective_laboratories
 from app.modules.courses.models import Course
 from app.modules.facilities.models import Laboratory
 from app.modules.faculty.models import Faculty
@@ -172,8 +173,8 @@ class Service:
                 main = db.scalar(select(LaboratoryFacultyAllocation).where(LaboratoryFacultyAllocation.course_offering_id == offering.id, LaboratoryFacultyAllocation.role_type == "MAIN", LaboratoryFacultyAllocation.is_active.is_(True)).order_by(LaboratoryFacultyAllocation.id))
             else:
                 main = db.scalar(select(TheoryFacultyAllocation).where(TheoryFacultyAllocation.course_offering_id == offering.id, TheoryFacultyAllocation.is_active.is_(True)).order_by(TheoryFacultyAllocation.id))
-            eligible_ids = set(course.eligible_laboratory_ids) or ({course.default_laboratory_id} if course.default_laboratory_id else set())
-            if not eligible_ids or (laboratory and not laboratory.is_active) or not main:
+            eligible_ids = {item.id for item in resolve_effective_laboratories(db, course, offering)}
+            if not eligible_ids or (laboratory and laboratory.id not in eligible_ids) or not main:
                 raise HTTPException(422, "Every rotation offering requires eligible laboratories and a MAIN faculty allocation")
             laboratories[offering.id] = laboratory
             main_faculty[offering.id] = main.faculty_id
@@ -250,13 +251,13 @@ class Service:
         configuration = db.scalar(select(LaboratoryBatchConfiguration).where(LaboratoryBatchConfiguration.course_offering_id == offering.id, LaboratoryBatchConfiguration.is_active.is_(True)))
         if not batch.is_active or not offering.is_active or (laboratory and not laboratory.is_active) or not course.is_active or course.course_type not in {"LABORATORY", "PRACTICAL"} or course.venue_requirement not in {"LABORATORY_ONLY", "CLASSROOM_OR_LABORATORY"}:
             raise HTTPException(422, "Rotation assignments require active laboratory-capable activity resources")
-        eligible_ids = set(course.eligible_laboratory_ids) or ({course.default_laboratory_id} if course.default_laboratory_id else set())
+        eligible_ids = {item.id for item in resolve_effective_laboratories(db, course, offering)}
         if not eligible_ids or (laboratory and laboratory.id not in eligible_ids):
             raise HTTPException(422, "Rotation laboratory must be eligible for the course")
         if laboratory and laboratory.owning_department_id != course.offering_department_id and not laboratory.is_shareable_across_departments:
             raise HTTPException(422, "Cross-department rotation laboratory must be shareable")
-        if offering.laboratory_selection_mode == "FIXED" and (not laboratory or laboratory.id != offering.laboratory_override_id):
-            raise HTTPException(422, "FIXED offering rotation assignments must use the required laboratory")
+        if laboratory and laboratory.id not in eligible_ids:
+            raise HTTPException(422, "Rotation laboratory must be permitted by the course offering")
         if not configuration or configuration.number_of_groups <= 1:
             raise HTTPException(422, "ROTATION_SINGLE_GROUP_NOT_ALLOWED: offering is not configured for rotation")
         if values["session_duration"] != course.session_duration:

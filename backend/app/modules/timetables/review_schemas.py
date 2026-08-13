@@ -13,7 +13,7 @@ class RequiredReasonRequest(BaseModel): reason:str=Field(min_length=1,max_length
 
 class TimetableGridEntry(BaseModel):
  entry_id:UUID;laboratory_rotation_block_id:UUID|None=None;combined_teaching_event_id:UUID|None=None;combined_teaching_group_code:str|None=None;combined_section_codes:list[str]=Field(default_factory=list);working_day_id:UUID;day_name:str;period_number:int;period_numbers:list[int];schedule_type:str;start_time:time;end_time:time
- course_code:str;course_name:str;course_type:str;section_code:str;faculty_code:str|None;faculty_name:str|None;classroom_room_number:str|None;laboratory_code:str|None;laboratory_name:str|None;batch_name:str|None;session_length:int;entry_status:str;is_manual:bool;is_locked:bool
+ course_code:str;course_name:str;course_type:str;section_code:str;faculty_code:str|None;faculty_name:str|None;classroom_room_number:str|None;laboratory_code:str|None;laboratory_name:str|None;batch_name:str|None;capacity_demand:int|None=None;resource_capacity:int|None=None;occupied_capacity:int|None=None;available_capacity:int|None=None;concurrent_usage_mode:str|None=None;session_length:int;entry_status:str;is_manual:bool;is_locked:bool
 class TimetableGridDay(BaseModel): working_day_id:UUID;day_name:str;sequence_number:int;entries:list[TimetableGridEntry]
 class TimetableGridResponse(BaseModel): version_id:UUID;view_type:str;resource_id:UUID;schedule_type:str;days:list[TimetableGridDay]
 

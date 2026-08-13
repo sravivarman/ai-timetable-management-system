@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.modules.academic_terms.models import AcademicTerm
-from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.models import CourseOffering, CourseOfferingAllowedLaboratory
 from app.modules.course_offerings.repositories import CourseOfferingRepository
 from app.modules.course_offerings.schemas import CourseOfferingBulkCreate, CourseOfferingCreate, CourseOfferingPage, CourseOfferingUpdate
 from app.modules.courses.models import Course
@@ -33,11 +33,22 @@ class CourseOfferingService:
 
     def create_offering(self, db: Session, payload: CourseOfferingCreate) -> CourseOffering:
         data = payload.model_dump()
+        allowed_ids = data.pop("allowed_laboratory_ids")
         self._validate_references(db, data)
         self._ensure_unique(db, data["course_id"], data["section_id"], data["academic_term_id"])
         self._validate_deprecated_common_theory_compatibility(db, data)
-        self._validate_laboratory_selection(db, data)
-        return self.repository.save(db, CourseOffering(**data))
+        self._validate_laboratory_selection(db, data, allowed_ids)
+        offering = CourseOffering(**data)
+        try:
+            db.add(offering)
+            db.flush()
+            self._sync_allowed_laboratories(db, offering, allowed_ids)
+            db.commit()
+            db.refresh(offering)
+            return offering
+        except Exception:
+            db.rollback()
+            raise
 
     def create_bulk(self, db: Session, payload: CourseOfferingBulkCreate) -> list[CourseOffering]:
         if len(set(payload.course_ids)) != len(payload.course_ids):
@@ -48,13 +59,17 @@ class CourseOfferingService:
         created: list[CourseOffering] = []
         try:
             for course_id in payload.course_ids:
-                data = CourseOfferingCreate(course_id=course_id, section_id=payload.section_id, academic_term_id=payload.academic_term_id, is_mandatory=payload.is_mandatory, elective_group_name=payload.elective_group_name, common_theory_group_code=bulk_data["common_theory_group_code"], is_common_theory=bulk_data["is_common_theory"], laboratory_selection_mode=bulk_data["laboratory_selection_mode"], laboratory_override_id=bulk_data["laboratory_override_id"]).model_dump()
+                data = CourseOfferingCreate(course_id=course_id, section_id=payload.section_id, academic_term_id=payload.academic_term_id, is_mandatory=payload.is_mandatory, elective_group_name=payload.elective_group_name, common_theory_group_code=bulk_data["common_theory_group_code"], is_common_theory=bulk_data["is_common_theory"], laboratory_selection_mode=bulk_data["laboratory_selection_mode"], laboratory_override_id=bulk_data["laboratory_override_id"], allowed_laboratory_ids=bulk_data["allowed_laboratory_ids"]).model_dump()
+                allowed_ids = data.pop("allowed_laboratory_ids")
                 self._validate_references(db, data)
                 self._ensure_unique(db, data["course_id"], data["section_id"], data["academic_term_id"])
                 self._validate_deprecated_common_theory_compatibility(db, data)
-                self._validate_laboratory_selection(db, data)
-                created.append(CourseOffering(**data))
-            db.add_all(created)
+                self._validate_laboratory_selection(db, data, allowed_ids)
+                offering = CourseOffering(**data)
+                db.add(offering)
+                db.flush()
+                self._sync_allowed_laboratories(db, offering, allowed_ids)
+                created.append(offering)
             db.commit()
             for offering in created:
                 db.refresh(offering)
@@ -69,13 +84,26 @@ class CourseOfferingService:
     def update_offering(self, db: Session, offering_id: UUID, payload: CourseOfferingUpdate) -> CourseOffering:
         offering = self.get_offering(db, offering_id)
         changes = payload.model_dump(exclude_unset=True)
+        requested_allowed_ids = changes.pop("allowed_laboratory_ids", None)
         data = {column.name: getattr(offering, column.name) for column in CourseOffering.__table__.columns if column.name not in {"id", "is_active", "created_at", "updated_at"}}
         data.update(changes)
+        allowed_ids = (
+            requested_allowed_ids
+            if requested_allowed_ids is not None
+            else offering.allowed_laboratory_ids if data.get("laboratory_selection_mode") == "RESTRICTED" else []
+        )
         self._validate_deprecated_common_theory_compatibility(db, data, exclude_id=offering.id)
-        self._validate_laboratory_selection(db, data)
+        self._validate_laboratory_selection(db, data, allowed_ids)
         for name, value in changes.items():
             setattr(offering, name, value)
-        return self.repository.save(db, offering)
+        try:
+            self._sync_allowed_laboratories(db, offering, allowed_ids)
+            db.commit()
+            db.refresh(offering)
+            return offering
+        except Exception:
+            db.rollback()
+            raise
 
     def soft_delete_offering(self, db: Session, offering_id: UUID) -> CourseOffering:
         offering = self.get_offering(db, offering_id)
@@ -86,7 +114,7 @@ class CourseOfferingService:
         offering = self.get_offering(db, offering_id)
         self._validate_references(db, {"course_id": offering.course_id, "section_id": offering.section_id, "academic_term_id": offering.academic_term_id})
         self._ensure_unique(db, offering.course_id, offering.section_id, offering.academic_term_id, exclude_id=offering.id)
-        self._validate_laboratory_selection(db, {column.name: getattr(offering, column.name) for column in CourseOffering.__table__.columns})
+        self._validate_laboratory_selection(db, {column.name: getattr(offering, column.name) for column in CourseOffering.__table__.columns}, offering.allowed_laboratory_ids)
         offering.is_active = True
         return self.repository.save(db, offering)
 
@@ -128,31 +156,61 @@ class CourseOfferingService:
             raise HTTPException(422, "Common theory group code requires is_common_theory=true")
 
     @staticmethod
-    def _validate_laboratory_selection(db: Session, data: dict) -> None:
+    def _validate_laboratory_selection(db: Session, data: dict, allowed_ids: list[UUID] | None = None) -> None:
         mode = data.get("laboratory_selection_mode") or "AUTO"
         laboratory_id = data.get("laboratory_override_id")
+        allowed_ids = allowed_ids or []
+        if len(allowed_ids) != len(set(allowed_ids)):
+            raise HTTPException(422, "Allowed laboratories must be unique")
         if mode == "AUTO" and laboratory_id is not None:
             raise HTTPException(422, "AUTO laboratory selection cannot specify a laboratory")
         if mode in {"PREFERRED", "FIXED"} and laboratory_id is None:
             raise HTTPException(422, f"{mode} laboratory selection requires a laboratory")
+        if mode == "RESTRICTED" and laboratory_id is not None:
+            raise HTTPException(422, "RESTRICTED laboratory selection uses allowed laboratories, not a single override")
+        if mode == "RESTRICTED" and not allowed_ids:
+            raise HTTPException(422, "RESTRICTED laboratory selection requires at least one allowed laboratory")
+        if mode != "RESTRICTED" and allowed_ids:
+            raise HTTPException(422, f"{mode} laboratory selection cannot specify allowed laboratories")
         course = db.get(Course, data["course_id"])
         if not course:
             return
         if mode != "AUTO" and course.venue_requirement not in {"LABORATORY_ONLY", "CLASSROOM_OR_LABORATORY"}:
             raise HTTPException(422, "Laboratory selection is allowed only for laboratory-capable courses")
-        if laboratory_id is None:
-            return
         eligible_ids = set(course.eligible_laboratory_ids)
         # Backward compatibility for pre-migration ORM fixtures/rows.
         if course.default_laboratory_id:
             eligible_ids.add(course.default_laboratory_id)
-        laboratory = db.get(Laboratory, laboratory_id)
-        if not laboratory or not laboratory.is_active:
-            raise HTTPException(422, "Offering laboratory must exist and be active")
-        if laboratory_id not in eligible_ids:
-            raise HTTPException(422, "Offering laboratory must be eligible for the course")
-        if laboratory.owning_department_id != course.offering_department_id and not laboratory.is_shareable_across_departments:
-            raise HTTPException(422, "Cross-department offering laboratory must be shareable")
+        for candidate_id in ([laboratory_id] if laboratory_id else allowed_ids):
+            laboratory = db.get(Laboratory, candidate_id)
+            if not laboratory or not laboratory.is_active:
+                raise HTTPException(422, "Offering laboratory must exist and be active")
+            if candidate_id not in eligible_ids:
+                raise HTTPException(422, "Offering laboratory must be eligible for the course")
+            if laboratory.owning_department_id != course.offering_department_id and not laboratory.is_shareable_across_departments:
+                raise HTTPException(422, "Cross-department offering laboratory must be shareable")
+
+    @staticmethod
+    def _sync_allowed_laboratories(db: Session, offering: CourseOffering, laboratory_ids: list[UUID]) -> None:
+        existing = {link.laboratory_id: link for link in offering.allowed_laboratory_links}
+        requested = set(laboratory_ids)
+        for laboratory_id, link in existing.items():
+            link.is_active = laboratory_id in requested
+        for priority, laboratory_id in enumerate(laboratory_ids, start=1):
+            link = existing.get(laboratory_id)
+            if link:
+                link.preference_priority = priority
+                link.is_active = True
+            else:
+                offering.allowed_laboratory_links.append(
+                    CourseOfferingAllowedLaboratory(
+                        course_offering_id=offering.id,
+                        laboratory_id=laboratory_id,
+                        preference_priority=priority,
+                        is_active=True,
+                    )
+                )
+        db.flush()
 
 
 course_offering_service = CourseOfferingService()

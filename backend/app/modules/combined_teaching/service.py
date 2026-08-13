@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.laboratories import resolve_effective_laboratories
 from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.facilities.models import Classroom, Laboratory
 from app.modules.faculty.models import Faculty
@@ -68,11 +69,13 @@ class CombinedTeachingService:
         if classroom and not classroom.is_active or laboratory and not laboratory.is_active:
             raise HTTPException(422, "COMBINED_TEACHING_NO_ELIGIBLE_VENUE: preferred venue must be active")
         if laboratory:
-            eligible_ids = set(db.scalars(select(CourseEligibleLaboratory.laboratory_id).where(CourseEligibleLaboratory.course_id == course.id, CourseEligibleLaboratory.is_active.is_(True))))
-            if not eligible_ids and course.default_laboratory_id:
-                eligible_ids.add(course.default_laboratory_id)
+            member_candidate_sets = [
+                {candidate.id for candidate in resolve_effective_laboratories(db, course, offering)}
+                for offering in offerings
+            ]
+            eligible_ids = set.intersection(*member_candidate_sets) if member_candidate_sets else set()
             if laboratory.id not in eligible_ids:
-                raise HTTPException(422, "COMBINED_TEACHING_NO_ELIGIBLE_VENUE: laboratory is not eligible for the selected course")
+                raise HTTPException(422, "COMBINED_TEACHING_NO_ELIGIBLE_VENUE: laboratory is not permitted by every member offering")
             if laboratory.owning_department_id != course.offering_department_id and not laboratory.is_shareable_across_departments:
                 raise HTTPException(422, "COMBINED_TEACHING_NO_ELIGIBLE_VENUE: cross-department laboratory is not shareable")
         venue = course.venue_requirement
@@ -85,7 +88,9 @@ class CombinedTeachingService:
         combined_strength = sum(section.student_strength for section in sections)
         if classroom and classroom.capacity is not None and classroom.capacity < combined_strength:
             raise HTTPException(422, f"COMBINED_TEACHING_CAPACITY_EXCEEDED: capacity {classroom.capacity} is below combined strength {combined_strength}")
-        return offerings, sections, combined_strength, classroom.capacity if classroom else None
+        if laboratory and laboratory.capacity is not None and laboratory.capacity < combined_strength:
+            raise HTTPException(422, f"COMBINED_TEACHING_CAPACITY_EXCEEDED: capacity {laboratory.capacity} is below combined strength {combined_strength}")
+        return offerings, sections, combined_strength, classroom.capacity if classroom else laboratory.capacity if laboratory else None
 
     def _response(self, db: Session, group: CombinedTeachingGroup):
         members = combined_teaching_repository.members(db, group.id)
@@ -93,9 +98,10 @@ class CombinedTeachingService:
         sections = {row.section_id: db.get(Section, row.section_id) for row in offerings}
         course = db.get(Course, group.course_id)
         room = db.get(Classroom, group.preferred_classroom_id) if group.preferred_classroom_id else None
+        laboratory = db.get(Laboratory, group.preferred_laboratory_id) if group.preferred_laboratory_id else None
         rows = [{"course_offering_id": row.id, "section_id": row.section_id, "section_code": sections[row.section_id].section_code, "section_strength": sections[row.section_id].student_strength, "course_code": course.course_code, "course_name": course.course_name} for row in sorted(offerings, key=lambda item: (sections[item.section_id].section_code, item.id))]
         strength = sum(row["section_strength"] for row in rows)
-        capacity = room.capacity if room else None
+        capacity = room.capacity if room else laboratory.capacity if laboratory else None
         return {"id": group.id, "academic_term_id": group.academic_term_id, "group_code": group.group_code, "group_name": group.group_name, "course_id": group.course_id, "faculty_id": group.faculty_id, "preferred_classroom_id": group.preferred_classroom_id, "preferred_laboratory_id": group.preferred_laboratory_id, "is_active": group.is_active, "combined_strength": strength, "venue_capacity": capacity, "capacity_status": "OK" if capacity is not None and capacity >= strength else "EXCEEDED" if capacity is not None else "NOT_CONFIGURED", "offerings": rows, "created_at": group.created_at, "updated_at": group.updated_at}
 
     def create(self, db: Session, payload: CombinedTeachingGroupCreate):

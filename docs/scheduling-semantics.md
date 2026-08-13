@@ -54,3 +54,40 @@ cycle and `weekly_periods` remains 4.
 Physical faculty workload and laboratory utilization can exceed a Course's
 `weekly_periods` when the same resource serves multiple student groups. This is
 expected and must never be represented by inflating Course master data.
+
+## Course-offering laboratory selection
+
+Course eligibility defines technical capability. An offering may narrow or
+prioritize that set, but it can never expand it:
+
+- `AUTO`: all active, ownership-compatible course-eligible laboratories; the
+  course default remains a soft preference.
+- `PREFERRED`: the offering laboratory is preferred, with every other eligible
+  laboratory retained as a fallback.
+- `RESTRICTED`: only the offering's normalized allowed-laboratory subset. Its
+  members are equally preferred.
+- `FIXED`: exactly the offering override laboratory.
+
+Resource availability and collision constraints are applied after this set is
+resolved. Grouped and synchronized rotations apply it independently to every
+physical occurrence; they do not permanently bind a group to one room.
+
+## Facility concurrency and capacity
+
+Laboratory concurrency is independent of department shareability, course
+eligibility, offering selection, and availability:
+
+- `EXCLUSIVE` (the default) preserves one unrelated logical activity per
+  laboratory and slot.
+- `CAPACITY_SHARED` permits arbitrary simultaneous logical activities while
+  their actual participant demand remains within `capacity` in every occupied
+  period.
+- Full-section demand is `Section.student_strength`; grouped demand is the
+  stored `StudentBatch.student_count`; a Combined Teaching event contributes
+  its combined strength once even though compatibility child entries exist.
+- Unavailable slots have zero usable capacity. Locked and manual entries consume
+  capacity.
+- A configured capacity also limits one exclusive activity, although capacity
+  remains optional for exclusive laboratories.
+
+Existing laboratories remain `EXCLUSIVE`; capacity alone never enables sharing.

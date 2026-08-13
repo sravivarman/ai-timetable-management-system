@@ -11,6 +11,7 @@ from app.modules.combined_teaching.models import CombinedTeachingEvent
 from app.modules.timetable_validation.models import ValidationRun
 from app.modules.resource_availability.service import snapshot_resource_is_available
 from app.modules.timetables.models import SolverRun,Timetable,TimetableEntry,TimetableEntryAudit,TimetableVersion
+from app.modules.timetables.capacity import entry_capacity_demand
 from app.modules.timetables.service import solver_input_builder
 from app.modules.timetables.optimization import PROFILE_DEFAULT_SECONDS,build_optimization_config
 
@@ -84,6 +85,8 @@ class TimetableSolverService:
   batches=defaultdict(list)
   for item in snapshot["student_batches"]:batches[item["section_id"]].append(item)
   for values in batches.values():values.sort(key=lambda item:(item["sequence_number"],item["id"]))
+  batch_by_id={item["id"]:item for item in snapshot["student_batches"]}
+  laboratories={item["id"]:{**item,"concurrent_usage_mode":item.get("concurrent_usage_mode","EXCLUSIVE")} for item in snapshot.get("laboratories",[])}
   configurations={item["id"]:item for item in snapshot["laboratory_batch_configurations"]};configuration_by_offering={item["course_offering_id"]:item for item in configurations.values()}
   rotation_blocks={item["id"]:item for item in snapshot.get("laboratory_rotation_blocks",[])}
   assignments_by_block=defaultdict(list)
@@ -107,7 +110,7 @@ class TimetableSolverService:
   allocation_faculty={item["id"]:item["faculty_id"] for item in snapshot["laboratory_faculty_allocations"]}
   fixed={item["id"]:item for item in snapshot["locked_entries"]}
   for entry in db.scalars(select(TimetableEntry).where(TimetableEntry.timetable_version_id==version_id,TimetableEntry.is_manual.is_(True))):
-   fixed[str(entry.id)]={key:(str(value) if isinstance(value,UUID) else value) for key,value in {"id":entry.id,"course_offering_id":entry.course_offering_id,"section_id":entry.section_id,"faculty_id":entry.faculty_id,"laboratory_faculty_allocation_id":entry.laboratory_faculty_allocation_id,"classroom_id":entry.classroom_id,"laboratory_id":entry.laboratory_id,"student_batch_id":entry.student_batch_id,"laboratory_rotation_block_id":entry.laboratory_rotation_block_id,"laboratory_rotation_assignment_id":entry.laboratory_rotation_assignment_id,"combined_teaching_event_id":entry.combined_teaching_event_id,"working_day_id":entry.working_day_id,"period_number":entry.period_number,"session_length":entry.session_length,"entry_type":entry.entry_type}.items()}
+   fixed[str(entry.id)]={key:(str(value) if isinstance(value,UUID) else value) for key,value in {"id":entry.id,"course_offering_id":entry.course_offering_id,"section_id":entry.section_id,"faculty_id":entry.faculty_id,"laboratory_faculty_allocation_id":entry.laboratory_faculty_allocation_id,"classroom_id":entry.classroom_id,"laboratory_id":entry.laboratory_id,"student_batch_id":entry.student_batch_id,"laboratory_rotation_block_id":entry.laboratory_rotation_block_id,"laboratory_rotation_assignment_id":entry.laboratory_rotation_assignment_id,"combined_teaching_event_id":entry.combined_teaching_event_id,"working_day_id":entry.working_day_id,"period_number":entry.period_number,"session_length":entry.session_length,"entry_type":entry.entry_type,"capacity_demand":entry_capacity_demand(db,entry)}.items()}
   rotation_assignment_by_id={item["id"]:item for item in snapshot["laboratory_rotation_assignments"]}
   fixed_rotation_blocks={item.get("laboratory_rotation_block_id") for item in fixed.values() if item.get("laboratory_rotation_block_id")}
   combined_groups=snapshot.get("combined_teaching_groups",[]);combined_offering_ids={offering_id for group in combined_groups for offering_id in group["course_offering_ids"]}
@@ -126,7 +129,7 @@ class TimetableSolverService:
    if not venue_options:input_errors.append(f"No eligible venue for combined group {group['group_code']}");continue
    children=[{"offering":offering,"section_id":offering["section_id"]} for offering in group_offerings]
    for session_number in range(already+1,group["sessions_per_week"]+1):
-    units.append({"offering":group_offerings[0],"section_id":group["section_ids"][0],"section_ids":group["section_ids"],"entry_type":group_offerings[0]["course_type"],"length":group["session_duration"],"faculty_options":[[group["faculty_id"]]],"faculty_id":group["faculty_id"],"lab_allocation_id":None,"venue_options":venue_options,"classroom_id":group.get("preferred_classroom_id"),"laboratory_id":group.get("preferred_laboratory_id"),"laboratory_ids":[],"batch_id":None,"batch_ids":[],"combined_group_id":group["id"],"children":children,"session_number":session_number})
+    units.append({"offering":group_offerings[0],"section_id":group["section_ids"][0],"section_ids":group["section_ids"],"entry_type":group_offerings[0]["course_type"],"length":group["session_duration"],"faculty_options":[[group["faculty_id"]]],"faculty_id":group["faculty_id"],"lab_allocation_id":None,"venue_options":venue_options,"classroom_id":group.get("preferred_classroom_id"),"laboratory_id":group.get("preferred_laboratory_id"),"laboratory_ids":[],"batch_id":None,"batch_ids":[],"capacity_demand":group["combined_strength"],"combined_group_id":group["id"],"children":children,"session_number":session_number})
   # A rotation block is one CP-SAT decision. Its child laboratory entries are
   # expanded only after the solver chooses the shared day and starting period.
   for block in sorted(rotation_blocks.values(),key=lambda item:(item["rotation_group_id"],item["block_number"],item["id"])):
@@ -145,15 +148,19 @@ class TimetableSolverService:
     else:
      allocation=next((item for item in theory_alloc[offering["id"]] if item["faculty_id"]==assignment.get("main_faculty_id")),None)
     candidate_laboratories=[assignment["laboratory_id"]] if assignment.get("laboratory_id") else list(offering.get("eligible_laboratory_ids") or [])
-    children.append({"assignment_id":assignment["id"],"offering":offering,"batch_id":assignment["batch_id"],"laboratory_id":assignment.get("laboratory_id"),"candidate_laboratory_ids":candidate_laboratories,"faculty_id":assignment.get("main_faculty_id"),"faculty_ids":faculty_ids,"lab_allocation_id":allocation["id"] if offering["course_type"]=="LABORATORY" and allocation else None,"length":assignment.get("session_duration"),"entry_type":offering["course_type"]})
+    children.append({"assignment_id":assignment["id"],"offering":offering,"batch_id":assignment["batch_id"],"capacity_demand":batch_by_id[assignment["batch_id"]]["student_count"],"laboratory_id":assignment.get("laboratory_id"),"candidate_laboratory_ids":candidate_laboratories,"faculty_id":assignment.get("main_faculty_id"),"faculty_ids":faculty_ids,"lab_allocation_id":allocation["id"] if offering["course_type"]=="LABORATORY" and allocation else None,"length":assignment.get("session_duration"),"entry_type":offering["course_type"]})
    if len(children)<2 or len({child["batch_id"] for child in children})!=len(children) or any(not child["candidate_laboratory_ids"] for child in children) or len({child["length"] for child in children})!=1:
     input_errors.append(f"Invalid synchronized rotation block {block['block_number']}");continue
    length=children[0]["length"]
    if length not in (2,3):input_errors.append(f"Invalid synchronized rotation duration for block {block['block_number']}");continue
    venue_options=[]
    for laboratory_choice in product(*(child["candidate_laboratory_ids"] for child in children)):
-    if len(set(laboratory_choice))==len(laboratory_choice):venue_options.append({"classroom_id":None,"laboratory_id":None,"laboratory_ids":list(laboratory_choice)})
-   if not venue_options:input_errors.append(f"No collision-free eligible laboratories for synchronized rotation block {block['block_number']}");continue
+    valid=True
+    for laboratory_id in set(laboratory_choice):
+     uses=[child for child,chosen in zip(children,laboratory_choice) if chosen==laboratory_id];laboratory=laboratories.get(laboratory_id,{})
+     if len(uses)>1 and (laboratory.get("concurrent_usage_mode")!="CAPACITY_SHARED" or sum(item["capacity_demand"] for item in uses)>int(laboratory.get("capacity") or 0)):valid=False
+    if valid:venue_options.append({"classroom_id":None,"laboratory_id":None,"laboratory_ids":list(laboratory_choice)})
+   if not venue_options:input_errors.append(f"No capacity-feasible eligible laboratories for synchronized rotation block {block['block_number']}");continue
    units.append({"offering":children[0]["offering"],"section_id":children[0]["offering"]["section_id"],"section_ids":[children[0]["offering"]["section_id"]],"entry_type":"LABORATORY","length":length,"faculty_options":[sorted({faculty for child in children for faculty in child["faculty_ids"]})],"faculty_id":children[0]["faculty_id"],"lab_allocation_id":children[0]["lab_allocation_id"],"venue_options":venue_options,"classroom_id":None,"laboratory_id":None,"laboratory_ids":venue_options[0]["laboratory_ids"],"batch_id":None,"batch_ids":[child["batch_id"] for child in children],"rotation_block_id":block["id"],"children":children})
   for offering in sorted(offerings.values(),key=lambda item:(item["section_id"],item["course_code"],item["id"])):
    if not offering["is_mandatory"]:continue
@@ -201,11 +208,12 @@ class TimetableSolverService:
        else:support_options.append(eligible)
      combinations=product(*support_options) if support_options else [()]
      faculty_options=[sorted({*([main["faculty_id"]] if main else []),*(item["faculty_id"] for item in selected)}) for selected in combinations]
-     units.append({"offering":offering,"section_id":offering["section_id"],"section_ids":[offering["section_id"]],"entry_type":offering["course_type"],"length":duration,"faculty_options":faculty_options,"faculty_id":main["faculty_id"] if main else None,"lab_allocation_id":main["id"] if lab_course else None,"venue_options":venue_options,"classroom_id":venue_options[0]["classroom_id"],"laboratory_id":venue_options[0]["laboratory_id"],"laboratory_ids":[venue_options[0]["laboratory_id"]] if venue_options[0]["laboratory_id"] else [],"batch_id":batch_id,"batch_ids":[batch_id] if batch_id else [],"session_number":session_number})
+     demand=batch["student_count"] if batch else offering["full_section_capacity_demand"]
+     units.append({"offering":offering,"section_id":offering["section_id"],"section_ids":[offering["section_id"]],"entry_type":offering["course_type"],"length":duration,"faculty_options":faculty_options,"faculty_id":main["faculty_id"] if main else None,"lab_allocation_id":main["id"] if lab_course else None,"venue_options":venue_options,"classroom_id":venue_options[0]["classroom_id"],"laboratory_id":venue_options[0]["laboratory_id"],"laboratory_ids":[venue_options[0]["laboratory_id"]] if venue_options[0]["laboratory_id"] else [],"batch_id":batch_id,"batch_ids":[batch_id] if batch_id else [],"capacity_demand":demand,"session_number":session_number})
 
-  model=cp_model.CpModel();assignments=[];resource_vars=defaultdict(list);section_vars=defaultdict(lambda:defaultdict(list));course_day=defaultdict(list);lab_day=defaultdict(list);faculty_day=defaultdict(list)
+  model=cp_model.CpModel();assignments=[];resource_vars=defaultdict(list);laboratory_terms=defaultdict(list);section_vars=defaultdict(lambda:defaultdict(list));course_day=defaultdict(list);lab_day=defaultdict(list);faculty_day=defaultdict(list)
   if input_errors:model.add(0==1)
-  fixed_resources=defaultdict(int);fixed_section=defaultdict(lambda:defaultdict(int));fixed_faculty_day=defaultdict(int);fixed_course_day=defaultdict(list);fixed_lab_day=defaultdict(int)
+  fixed_resources=defaultdict(int);fixed_laboratory_demand=defaultdict(int);fixed_section=defaultdict(lambda:defaultdict(int));fixed_faculty_day=defaultdict(int);fixed_course_day=defaultdict(list);fixed_lab_day=defaultdict(int)
   fixed_section_units=set()
   seen_fixed_resources=set()
   for item in fixed.values():
@@ -216,8 +224,11 @@ class TimetableSolverService:
     first_resource=not shared_key or resource_key not in seen_fixed_resources
     if first_resource:
      for faculty in fixed_faculties:fixed_resources[("faculty",faculty,item["working_day_id"],period)]+=1
-     for kind,value in (("classroom",item.get("classroom_id")),("laboratory",item.get("laboratory_id")),("batch",item.get("student_batch_id"))):
+     for kind,value in (("classroom",item.get("classroom_id")),("batch",item.get("student_batch_id"))):
       if value:fixed_resources[(kind,value,item["working_day_id"],period)]+=1
+     laboratory_id=item.get("laboratory_id")
+     if laboratory_id:
+      key=("laboratory",laboratory_id,item["working_day_id"],period);fixed_resources[key]+=1;fixed_laboratory_demand[key]+=int(item.get("capacity_demand") or sections.get(item["section_id"],{}).get("student_strength") or 0)
      if shared_key:seen_fixed_resources.add(resource_key)
     group=item.get("student_batch_id") or "__FULL__";fixed_section[(item["section_id"],item["working_day_id"],period)][group]+=1
     if first_resource:
@@ -241,11 +252,16 @@ class TimetableSolverService:
        if any(not snapshot_resource_is_available("FACULTY",faculty,resource_modes,resource_slots,day["id"],period) for faculty in faculty_ids for period in occupied):continue
        if any(not snapshot_resource_is_available("LABORATORY",laboratory_id,resource_modes,resource_slots,day["id"],period) for laboratory_id in selected_laboratories if laboratory_id for period in occupied):continue
        if selected_classroom and any(not snapshot_resource_is_available("CLASSROOM",selected_classroom,resource_modes,resource_slots,day["id"],period) for period in occupied):continue
-       variable=model.new_bool_var(f"u{index}_o{option_index}_v{venue_index}_{day['sequence_number']}_{start}");variables.append(variable);record={"var":variable,"unit":unit,"faculty_ids":faculty_ids,"support_option_index":option_index,"day_id":day["id"],"start":start,"occupied":occupied,"classroom_id":selected_classroom,"laboratory_id":selected_laboratory,"laboratory_ids":selected_laboratories};assignments.append(record)
+       laboratory_demands=defaultdict(int)
+       if unit.get("rotation_block_id"):
+        for child,laboratory_id in zip(unit["children"],selected_laboratories):laboratory_demands[laboratory_id]+=int(child["capacity_demand"])
+       elif selected_laboratory:laboratory_demands[selected_laboratory]=int(unit["capacity_demand"])
+       if any(laboratories.get(laboratory_id,{}).get("capacity") is not None and demand>int(laboratories[laboratory_id]["capacity"]) for laboratory_id,demand in laboratory_demands.items()):continue
+       variable=model.new_bool_var(f"u{index}_o{option_index}_v{venue_index}_{day['sequence_number']}_{start}");variables.append(variable);record={"var":variable,"unit":unit,"faculty_ids":faculty_ids,"support_option_index":option_index,"day_id":day["id"],"start":start,"occupied":occupied,"classroom_id":selected_classroom,"laboratory_id":selected_laboratory,"laboratory_ids":selected_laboratories,"laboratory_demands":dict(laboratory_demands)};assignments.append(record)
        for period in occupied:
         for faculty in faculty_ids:resource_vars[("faculty",faculty,day["id"],period)].append(variable)
         if selected_classroom:resource_vars[("classroom",selected_classroom,day["id"],period)].append(variable)
-        for laboratory_id in selected_laboratories:resource_vars[("laboratory",laboratory_id,day["id"],period)].append(variable)
+        for laboratory_id,demand in laboratory_demands.items():laboratory_terms[("laboratory",laboratory_id,day["id"],period)].append((variable,demand))
         for batch_id in unit.get("batch_ids",[]):resource_vars[("batch",batch_id,day["id"],period)].append(variable)
         for section_id in unit.get("section_ids",[unit["section_id"]]):section_vars[(section_id,day["id"],period)][unit["batch_id"] or "__FULL__"].append(variable)
        for child in unit.get("children",[]) if unit.get("combined_group_id") else [{"offering":unit["offering"]}]:course_day[(child["offering"]["id"],day["id"])].append((variable,start))
@@ -254,8 +270,18 @@ class TimetableSolverService:
    if variables:model.add_exactly_one(variables)
    else:model.add(0==1)
 
-  if any(count>1 for count in fixed_resources.values()):model.add(0==1)
+  if any(count>1 for key,count in fixed_resources.items() if key[0]!="laboratory"):model.add(0==1)
   for key,variables in resource_vars.items():model.add(sum(variables)<=max(0,1-fixed_resources[key]))
+  laboratory_keys=set(laboratory_terms)|{key for key in fixed_resources if key[0]=="laboratory"}
+  for key in laboratory_keys:
+   laboratory=laboratories.get(key[1],{});mode=laboratory.get("concurrent_usage_mode","EXCLUSIVE");terms=laboratory_terms.get(key,[])
+   if mode=="CAPACITY_SHARED":
+    capacity=int(laboratory.get("capacity") or 0)
+    if capacity<=0 or fixed_laboratory_demand[key]>capacity:model.add(0==1)
+    else:model.add(sum(variable*demand for variable,demand in terms)<=capacity-fixed_laboratory_demand[key])
+   else:
+    if fixed_resources[key]>1:model.add(0==1)
+    model.add(sum(variable for variable,_ in terms)<=max(0,1-fixed_resources[key]))
   for key,groups in section_vars.items():
    fixed_groups=fixed_section[key];full=groups.get("__FULL__",[]);fixed_full=fixed_groups.get("__FULL__",0)
    if fixed_full>1:model.add(0==1)

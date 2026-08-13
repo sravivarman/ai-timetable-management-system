@@ -50,7 +50,7 @@ def free_faculty(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=
 @review_version_router.get("/{version_id}/free-classrooms",response_model=FreeResourceResponse,dependencies=[view_permission])
 def free_classrooms(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"classroom",working_day_id,period_number)
 @review_version_router.get("/{version_id}/free-laboratories",response_model=FreeResourceResponse,dependencies=[view_permission])
-def free_laboratories(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"laboratory",working_day_id,period_number)
+def free_laboratories(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),section_id:UUID|None=None,student_batch_id:UUID|None=None,db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"laboratory",working_day_id,period_number,section_id,student_batch_id)
 @review_version_router.get("/{version_id}/conflicts",response_model=ConflictReportResponse,dependencies=[view_permission])
 def conflicts(version_id:UUID,db:Session=Depends(get_db)):return review_service.conflicts(db,version_id)
 

@@ -49,7 +49,8 @@ export function MasterDataManager({ config, module, variant }: { config: MasterC
     const decorated = rows.map((row) => {
       const course = (lookupRecords["/courses"] ?? []).find((item) => item.id === String(row.course_id));
       const laboratoryLabel = row.laboratory_override_id ? lookupLabels["/laboratories"]?.get(String(row.laboratory_override_id)) : undefined;
-      const presentation = laboratoryAssignmentPresentation(row, course, laboratoryLabel);
+      const allowedLabels = Array.isArray(row.allowed_laboratory_ids) ? row.allowed_laboratory_ids.map((id) => lookupLabels["/laboratories"]?.get(String(id)) ?? "Laboratory metadata unavailable") : [];
+      const presentation = laboratoryAssignmentPresentation(row, course, laboratoryLabel, allowedLabels);
       return { ...row, laboratory_assignment_display: presentation.assignment, laboratory_selection_display: presentation.laboratory };
     });
     return ["laboratory_assignment_display", "laboratory_selection_display"].includes(sortKey)

@@ -10,8 +10,8 @@ vi.mock("@/lib/master-data-api", async () => { const actual = await vi.importAct
 const data: Record<string, Record<string, unknown>[]> = {
   "/sections": [{ id: "section-1", section_code: "CSE-A", section_name: "A", academic_term_id: "term-1", display_label: "2026-27 I-I • CSE-A" }],
   "/academic-terms": [{ id: "term-1", academic_year: "2026-27", term_name: "I-I" }],
-  "/course-offerings": [{ id: "offering-1", section_id: "section-1", academic_term_id: "term-1", display_label: "CSL1 - Programming Lab (CSE-A)" }, { id: "offering-2", section_id: "section-1", academic_term_id: "term-1", display_label: "CSL2 - Graphics Lab (CSE-A)" }],
-  "/courses": [],
+  "/course-offerings": [{ id: "offering-1", course_id: "course-1", section_id: "section-1", academic_term_id: "term-1", laboratory_selection_mode: "RESTRICTED", allowed_laboratory_ids: ["lab-1"], display_label: "CSL1 - Programming Lab (CSE-A)" }, { id: "offering-2", course_id: "course-2", section_id: "section-1", academic_term_id: "term-1", laboratory_selection_mode: "AUTO", display_label: "CSL2 - Graphics Lab (CSE-A)" }],
+  "/courses": [{ id: "course-1", eligible_laboratory_ids: ["lab-1", "lab-2"] }, { id: "course-2", eligible_laboratory_ids: ["lab-2"] }],
   "/laboratory-batch-configurations": [{ id: "config-1", course_offering_id: "offering-1", number_of_groups: 2 }, { id: "config-2", course_offering_id: "offering-2", number_of_groups: 2 }],
   "/student-batches": [{ id: "batch-1", section_id: "section-1", batch_name: "A1" }, { id: "batch-2", section_id: "section-1", batch_name: "A2" }],
   "/laboratories": [{ id: "lab-1", laboratory_code: "CSE-P1", laboratory_name: "Programming Laboratory" }, { id: "lab-2", laboratory_code: "CSE-G1", laboratory_name: "Graphics Laboratory" }],
@@ -38,5 +38,13 @@ describe("RotationMatrixManager", () => {
     await user.click(screen.getByRole("checkbox", { name: /CSL1/ })); await user.click(screen.getByRole("checkbox", { name: /CSL2/ }));
     await user.click(screen.getByRole("button", { name: "Generate matrix" }));
     expect(masterDataApi.generateRotation).toHaveBeenCalledWith(expect.objectContaining({ section_id: "section-1", academic_term_id: "term-1", rotation_code: "CSE-ROTATION", course_offering_ids: ["offering-1", "offering-2"] }));
+  });
+  it("limits rotation assignment editing to the offering restricted subset", async () => {
+    const user = userEvent.setup(); renderWithProviders(<RotationMatrixManager rotations={[{ id: "rotation-1", rotation_code: "CSE-A-ROT", section_id: "section-1", academic_term_id: "term-1", rotation_type: "CYCLIC" }]} canManage />);
+    await user.click(await screen.findByRole("button", { name: /CSL1 - Programming Lab/ }));
+    await user.click(screen.getByRole("combobox", { name: "Laboratory room" }));
+    const listbox = await screen.findByRole("listbox", { name: "Laboratory room options" });
+    expect(within(listbox).getByRole("option", { name: /CSE-P1/ })).toBeInTheDocument();
+    expect(within(listbox).queryByRole("option", { name: /CSE-G1/ })).not.toBeInTheDocument();
   });
 });

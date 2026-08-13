@@ -5,6 +5,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.laboratories import resolve_effective_laboratories
 from app.modules.combined_teaching.models import CombinedTeachingEvent, CombinedTeachingGroupMember
 from app.modules.courses.models import Course
 from app.modules.facilities.models import Classroom,Laboratory
@@ -16,6 +17,7 @@ from app.modules.schedule_configuration.models import PeriodTiming,WorkingDay
 from app.modules.timetables.entry_repository import entry_repository
 from app.modules.timetables.entry_schemas import TimetableEntryCreate
 from app.modules.timetables.models import Timetable,TimetableEntry,TimetableEntryAudit,TimetableVersion
+from app.modules.timetables.capacity import entry_capacity_demand,logical_capacity_key
 
 IMMUTABLE_TIMETABLE_STATUSES={"APPROVED","PUBLISHED","ARCHIVED"}
 
@@ -67,10 +69,8 @@ class TimetableEntryService:
   if data.laboratory_id:
    laboratory=db.scalar(select(Laboratory).where(Laboratory.id==data.laboratory_id))
    if not laboratory or not laboratory.is_active:raise HTTPException(422,"Laboratory must be active")
-   eligible_ids=set(course.eligible_laboratory_ids) or ({course.default_laboratory_id} if course.default_laboratory_id else set())
-   if laboratory.id not in eligible_ids:raise HTTPException(422,"Laboratory must be eligible for the course")
-   if laboratory.owning_department_id!=course.offering_department_id and not laboratory.is_shareable_across_departments:raise HTTPException(422,"Cross-department laboratory must be shareable")
-   if offering.laboratory_selection_mode=="FIXED" and laboratory.id!=offering.laboratory_override_id:raise HTTPException(422,"Entry must use the offering's fixed laboratory")
+   effective_ids={item.id for item in resolve_effective_laboratories(db,course,offering)}
+   if laboratory.id not in effective_ids:raise HTTPException(422,"Laboratory must be permitted by the course offering")
 
   if data.session_length!=course.session_duration:raise HTTPException(422,"Session length must match the course session pattern")
   if course.course_type in {"THEORY","CDC","PRACTICAL"} and not data.faculty_id:raise HTTPException(422,"The academic activity requires an assigned faculty member")
@@ -101,8 +101,11 @@ class TimetableEntryService:
   if laboratory and any(not availability_service.is_available(db,"LABORATORY",laboratory.id,timetable.academic_term_id,data.working_day_id,period) for period in periods):raise HTTPException(409,"Laboratory is blocked or unavailable during the requested session")
   if any(not availability_service.is_available(db,"FACULTY",faculty_id,timetable.academic_term_id,data.working_day_id,period) for faculty_id in constraint_faculty_ids for period in periods):raise HTTPException(409,"Faculty is unavailable during the requested session")
 
-  conflicts=[]
-  for existing in entry_repository.overlapping(db,version_id,data.working_day_id,data.period_number,data.period_number+data.session_length-1,exclude_id):
+  demand=entry_capacity_demand(db,data)
+  if laboratory and laboratory.capacity is not None and demand>laboratory.capacity:raise HTTPException(409,f"{laboratory.laboratory_name} {laboratory.room_number} has capacity {laboratory.capacity}; the selected activity requires capacity for {demand} students.")
+
+  conflicts=[];overlapping=entry_repository.overlapping(db,version_id,data.working_day_id,data.period_number,data.period_number+data.session_length-1,exclude_id)
+  for existing in overlapping:
    same_combined=data.combined_teaching_event_id is not None and data.combined_teaching_event_id==existing.combined_teaching_event_id
    parallel_groups=(data.student_batch_id is not None and existing.student_batch_id is not None and existing.student_batch_id!=data.student_batch_id)
    if existing.section_id==data.section_id and not parallel_groups:conflicts.append("section")
@@ -113,9 +116,20 @@ class TimetableEntryService:
     assignment=db.get(LaboratoryRotationAssignment,existing.laboratory_rotation_assignment_id);existing_faculties|={UUID(str(value)) for value in ([assignment.main_faculty_id,*assignment.supporting_faculty_ids] if assignment else []) if value}
    if not same_combined and constraint_faculty_ids&existing_faculties:conflicts.append("faculty")
    if not same_combined and data.classroom_id and existing.classroom_id==data.classroom_id:conflicts.append("classroom")
-   if not same_combined and data.laboratory_id and existing.laboratory_id==data.laboratory_id:conflicts.append("laboratory")
+   if not same_combined and data.laboratory_id and existing.laboratory_id==data.laboratory_id and laboratory.concurrent_usage_mode!="CAPACITY_SHARED":conflicts.append("laboratory")
    if data.student_batch_id and existing.student_batch_id==data.student_batch_id:conflicts.append("student_batch")
   if conflicts:raise HTTPException(409,"Overlapping timetable entry conflicts: "+", ".join(sorted(set(conflicts))))
+  if laboratory and laboratory.concurrent_usage_mode=="CAPACITY_SHARED":
+   capacity=int(laboratory.capacity or 0)
+   for period in periods:
+    logical={}
+    for existing in overlapping:
+     if existing.laboratory_id!=laboratory.id or not (existing.period_number<=period<=existing.period_number+existing.session_length-1):continue
+     if data.combined_teaching_event_id and existing.combined_teaching_event_id==data.combined_teaching_event_id:continue
+     logical.setdefault(logical_capacity_key(existing),entry_capacity_demand(db,existing))
+    occupied=sum(logical.values())
+    if occupied+demand>capacity:
+     raise HTTPException(409,f"{laboratory.laboratory_name} {laboratory.room_number} has capacity {capacity}. Existing occupancy is {occupied} students during period {period}; the selected {demand}-student group cannot be added.")
 
  def _validate_lab_lunch(self,db,term_id,start,length):
   term=db.scalar(select(AcademicTerm).where(AcademicTerm.id==term_id));schedule_type="FIRST_YEAR" if term and term.year_number==1 else "HIGHER_YEAR"

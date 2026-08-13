@@ -73,9 +73,12 @@ function GenerateRotation({ records, onClose, onComplete }: { records: Record<st
 
 function AssignmentEditor({ assignment, records, labels, onClose, onComplete }: { assignment: RotationAssignment; records: Record<string, MasterRecord[]>; labels: Record<string, Map<string, string>>; onClose(): void; onComplete(): void }) {
   const { notify } = useToast(); const [supportSearch, setSupportSearch] = useState(""); const [values, setValues] = useState({ course_offering_id: assignment.course_offering_id, batch_id: assignment.batch_id, laboratory_id: assignment.laboratory_id ?? "", main_faculty_id: assignment.main_faculty_id, supporting_faculty_ids: assignment.supporting_faculty_ids ?? [], session_duration: assignment.session_duration });
+  const selectedOffering = records["/course-offerings"].find((row) => row.id === values.course_offering_id);
+  const selectedCourse = records["/courses"].find((row) => row.id === selectedOffering?.course_id);
+  const laboratoryIds = selectedOffering?.laboratory_selection_mode === "FIXED" ? [String(selectedOffering.laboratory_override_id ?? "")] : selectedOffering?.laboratory_selection_mode === "RESTRICTED" && Array.isArray(selectedOffering.allowed_laboratory_ids) ? selectedOffering.allowed_laboratory_ids.map(String) : Array.isArray(selectedCourse?.eligible_laboratory_ids) ? selectedCourse.eligible_laboratory_ids.map(String) : selectedCourse?.default_laboratory_id ? [String(selectedCourse.default_laboratory_id)] : [];
   const options = (endpoint: string) => [
     ...(endpoint === "/laboratories" ? [{ value: "", label: "Automatic eligible laboratory" }] : []),
-    ...records[endpoint].map((row) => ({ value: row.id, label: labels[endpoint]?.get(row.id) ?? readableRecordLabel(endpoint, row) })),
+    ...records[endpoint].filter((row) => endpoint !== "/laboratories" || laboratoryIds.includes(row.id)).map((row) => ({ value: row.id, label: labels[endpoint]?.get(row.id) ?? readableRecordLabel(endpoint, row) })),
   ];
   const mutation = useMutation({ mutationFn: () => masterDataApi.updateRotationAssignment(assignment.id, { ...values, laboratory_id: values.laboratory_id || null }), onSuccess: onComplete, onError: (error) => notify(apiErrorMessage(error), "error") });
   const supportingOptions = options("/faculty").filter((option) => option.value !== values.main_faculty_id && option.label.toLowerCase().includes(supportSearch.toLowerCase()));

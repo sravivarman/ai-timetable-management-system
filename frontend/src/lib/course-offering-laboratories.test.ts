@@ -12,4 +12,13 @@ describe("Course Offering laboratory presentation", () => {
   ])("renders %s correctly", (_name, venue, mode, label, assignment, laboratory) => {
     expect(laboratoryAssignmentPresentation({ id: "offering", laboratory_selection_mode: mode }, { id: "course", venue_requirement: venue }, label)).toEqual({ assignment, laboratory });
   });
+
+  it("renders a readable restricted subset without exposing IDs", () => {
+    expect(laboratoryAssignmentPresentation(
+      { id: "offering-uuid", laboratory_selection_mode: "RESTRICTED", allowed_laboratory_ids: ["lab-1", "lab-2"] },
+      { id: "course-uuid", venue_requirement: "LABORATORY_ONLY" },
+      undefined,
+      ["3117 · Engineering Physics Lab", "5014 · Engineering Physics Lab"],
+    )).toEqual({ assignment: "Restricted", laboratory: "3117 · Engineering Physics Lab, 5014 · Engineering Physics Lab" });
+  });
 });

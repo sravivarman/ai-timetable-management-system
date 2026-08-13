@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.models import CourseOffering, CourseOfferingAllowedLaboratory
 from app.modules.authentication.models import Permission, Role
 from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.facilities.models import Laboratory
@@ -124,6 +124,29 @@ class LaboratoryRotationEngineTests(unittest.TestCase):
         self.assertEqual(len(pairs), 4)
         self.assertTrue(all(sum(row.batch_id == batch and row.course_offering_id == offering for block in matrix["blocks"] for row in block["assignments"]) == 2 for batch, offering in pairs))
         self.assertNotIn(independent, matrix["course_offering_ids"])
+
+    def test_activity_rotation_preserves_each_child_restricted_candidate_set(self):
+        self._set_group_count(2); second = self._add_lab("RESTRICTED-B", 2)
+        db = self.ctx.session_factory()
+        try:
+            offering = db.get(CourseOffering, self.fixture.lab_offering.id)
+            course = db.get(Course, offering.course_id)
+            excluded = Laboratory(laboratory_code="ROT-EXCLUDED", laboratory_name="Excluded Rotation Lab", room_number="R-EXCLUDED", owning_department_id=self.ctx.active_department.id)
+            db.add(excluded); db.flush()
+            db.add_all([CourseEligibleLaboratory(course_id=course.id, laboratory_id=self.fixture.laboratory.id), CourseEligibleLaboratory(course_id=course.id, laboratory_id=excluded.id, preference_priority=99)])
+            offering.laboratory_selection_mode = "RESTRICTED"
+            db.add(CourseOfferingAllowedLaboratory(course_offering_id=offering.id, laboratory_id=self.fixture.laboratory.id))
+            db.commit(); excluded_id = excluded.id
+        finally:
+            db.close()
+        matrix = self._generate([self.fixture.lab_offering.id, second], "RESTRICTED-ROTATION")
+        self.assertTrue(all(row.laboratory_id is None for block in matrix["blocks"] for row in block["assignments"] if row.course_offering_id == self.fixture.lab_offering.id))
+        response = self.fixture.client.post(f"/api/v1/timetable-versions/{self.fixture.version.id}/build-solver-input", headers=self.ctx.headers["administrator"])
+        self.assertEqual(response.status_code, 201, response.text)
+        snapshot = response.json()["snapshot_json"]
+        child_offering = next(item for item in snapshot["course_offerings"] if item["id"] == str(self.fixture.lab_offering.id))
+        self.assertEqual(child_offering["eligible_laboratory_ids"], [str(self.fixture.laboratory.id)])
+        self.assertNotIn(str(excluded_id), child_offering["eligible_laboratory_ids"])
 
     def test_two_groups_three_laboratories_cyclic(self):
         self._set_group_count(2); second = self._add_lab("B", 2); third = self._add_lab("C", 2)

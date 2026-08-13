@@ -11,6 +11,7 @@ from sqlalchemy import select
 
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.laboratories import effective_laboratory_ids
 from app.modules.combined_teaching.models import CombinedTeachingGroup, CombinedTeachingGroupMember
 from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.departments.models import Department
@@ -27,6 +28,7 @@ from app.modules.resource_availability.service import availability_service
 from app.modules.sections.models import Section
 from app.modules.timetable_validation.models import ValidationRun
 from app.modules.timetables.models import SolverInputSnapshot, Timetable, TimetableEntry, TimetableVersion
+from app.modules.timetables.capacity import entry_capacity_demand
 
 
 def canonical_value(value):
@@ -205,8 +207,10 @@ class SolverInputBuilder:
                 "allows_same_course_double_period": course.allows_same_course_double_period,
                 "default_laboratory_id": course.default_laboratory_id,
                 "laboratory_selection_mode": offering.laboratory_selection_mode,
-                "preferred_laboratory_id": offering.laboratory_override_id if offering.laboratory_selection_mode == "PREFERRED" else course.default_laboratory_id,
+                "allowed_laboratory_ids": offering.allowed_laboratory_ids,
+                "preferred_laboratory_id": offering.laboratory_override_id if offering.laboratory_selection_mode == "PREFERRED" else course.default_laboratory_id if offering.laboratory_selection_mode == "AUTO" else None,
                 "fixed_laboratory_id": offering.laboratory_override_id if offering.laboratory_selection_mode == "FIXED" else None,
+                "full_section_capacity_demand": section_by_id[offering.section_id].student_strength,
             }
             configuration = config_by_offering.get(offering.id)
             item["effective_group_count"] = configuration.number_of_groups if configuration else course.default_group_count
@@ -215,15 +219,13 @@ class SolverInputBuilder:
                 classroom.id for classroom in classrooms
                 if classroom.is_shareable or classroom.owning_department_id == course.offering_department_id
             ]
-            allowed_ids = set(eligible_ids_by_course.get(course.id, []))
+            allowed_ids = set(effective_laboratory_ids(course, offering))
             item["eligible_laboratory_ids"] = [
                 laboratory.id for laboratory in laboratories
                 if laboratory.id in allowed_ids and (
                     laboratory.is_shareable_across_departments or laboratory.owning_department_id == course.offering_department_id
                 )
             ]
-            if offering.laboratory_selection_mode == "FIXED":
-                item["eligible_laboratory_ids"] = [offering.laboratory_override_id] if offering.laboratory_override_id in item["eligible_laboratory_ids"] else []
             if course.course_type == "LABORATORY":
                 item["course_default_lab_group_count"] = course.default_lab_group_count
                 item["effective_lab_group_count"] = (
@@ -259,19 +261,19 @@ class SolverInputBuilder:
                 "eligible_classroom_ids":[str(group.preferred_classroom_id)] if group.preferred_classroom_id else [],
                 "laboratory_selection_mode":"PREFERRED" if group.preferred_laboratory_id else "AUTO",
                 "fixed_laboratory_id":None,
-                "eligible_laboratory_ids":[str(laboratory.id) for laboratory in laboratories if laboratory.id in set(eligible_ids_by_course.get(group.course_id, [])) and (laboratory.is_shareable_across_departments or laboratory.owning_department_id==course_by_id[group.course_id].offering_department_id)],
+                "eligible_laboratory_ids":[str(laboratory.id) for laboratory in laboratories if laboratory.id in set.intersection(*[set(effective_laboratory_ids(course_by_id[group.course_id], next(offering for offering in offerings if offering.id == member.course_offering_id))) for member in members_by_group[group.id]]) and (laboratory.is_shareable_across_departments or laboratory.owning_department_id==course_by_id[group.course_id].offering_department_id)],
                 "weekly_periods":next(offering.weekly_periods_override or course_by_id[offering.course_id].weekly_periods for offering in offerings if offering.id==members_by_group[group.id][0].course_offering_id),
                 "session_duration":course_by_id[group.course_id].session_duration,
                 "sessions_per_week":course_by_id[group.course_id].sessions_per_week,
             } for group in combined_groups],
             "primary_classroom_assignments":[row_dict(x,"id","section_id","classroom_id","academic_term_id","effective_from","effective_to") for x in room_assignments],
-            "laboratories":[row_dict(x,"id","laboratory_code","laboratory_name","room_number","owning_department_id","is_shareable_across_departments","is_available_all_periods","availability_mode") for x in laboratories],
+            "laboratories":[row_dict(x,"id","laboratory_code","laboratory_name","room_number","owning_department_id","capacity","concurrent_usage_mode","is_shareable_across_departments","is_available_all_periods","availability_mode") for x in laboratories],
             "resource_availability_profiles":profiles,
             "resource_availability_slots":generic_slots,
             "laboratory_availability_blocks":[{**x,"laboratory_id":x["resource_id"]} for x in lab_availability_blocks],
             "working_days":[row_dict(x,"id","day_name","sequence_number") for x in working_days],
             "period_timings":[row_dict(x,"id","schedule_type","period_number","start_time","end_time","duration_minutes","is_instructional","break_type","sequence_number") for x in timings],
-            "locked_entries":[row_dict(x,"id","timetable_version_id","course_offering_id","section_id","faculty_id","laboratory_faculty_allocation_id","classroom_id","laboratory_id","student_batch_id","laboratory_rotation_block_id","laboratory_rotation_assignment_id","combined_teaching_event_id","working_day_id","period_number","session_length","entry_type","is_manual","is_locked") for x in locked_entries],
+            "locked_entries":[{**row_dict(x,"id","timetable_version_id","course_offering_id","section_id","faculty_id","laboratory_faculty_allocation_id","classroom_id","laboratory_id","student_batch_id","laboratory_rotation_block_id","laboratory_rotation_assignment_id","combined_teaching_event_id","working_day_id","period_number","session_length","entry_type","is_manual","is_locked"),"capacity_demand":entry_capacity_demand(db,x)} for x in locked_entries],
         }
         snapshot = canonical_value(snapshot); _, digest = canonical_hash(snapshot)
         if not persist:return digest

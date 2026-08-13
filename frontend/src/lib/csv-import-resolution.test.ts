@@ -79,7 +79,7 @@ describe("readable CSV import resolution", () => {
     expect(csvTemplateColumns(masterConfigs.courses)).toContain("offering_department_code");
     expect(csvTemplateColumns(masterConfigs.courses)).toEqual(expect.arrayContaining(["eligible_laboratory_codes", "preferred_laboratory_code"]));
     expect(csvTemplateColumns(masterConfigs.courses)).not.toContain("offering_department_id");
-    expect(csvTemplateColumns(masterConfigs["course-offerings"])).toEqual(expect.arrayContaining(["course_code", "section_code", "academic_term_code", "laboratory_selection_mode", "laboratory_code"]));
+    expect(csvTemplateColumns(masterConfigs["course-offerings"])).toEqual(expect.arrayContaining(["course_code", "section_code", "academic_term_code", "laboratory_selection_mode", "laboratory_code", "allowed_laboratory_codes"]));
     expect(csvTemplateColumns(masterConfigs["course-offerings"])).not.toEqual(expect.arrayContaining(["is_common_theory", "common_theory_group_code"]));
     expect(csvTemplateColumns(masterConfigs["batch-configurations"])).toContain("number_of_groups");
     expect(csvTemplateColumns(masterConfigs["batch-configurations"])).not.toContain("number_of_batches");
@@ -120,6 +120,21 @@ describe("readable CSV import resolution", () => {
     expect(row.payload).not.toHaveProperty("course_code");
     expect(row.payload).not.toHaveProperty("section_code");
     expect(row.payload).not.toHaveProperty("academic_term_code");
+  });
+
+  it("resolves a restricted offering laboratory subset and rejects unknown or duplicate codes", () => {
+    const laboratory2 = { id: "lab-uuid-2", laboratory_code: "PHY-2", laboratory_name: "Physics Lab 2", is_active: true };
+    const restrictedCourse = { ...course, venue_requirement: "LABORATORY_ONLY", eligible_laboratory_ids: [laboratory.id, laboratory2.id] };
+    const restrictedLookups = { ...lookups, "/courses": [restrictedCourse], "/laboratories": [laboratory, laboratory2] };
+    const source = { course_code: "CS301", section_code: "CSE-A", academic_term_code: "2026-27 | I-I", laboratory_selection_mode: "RESTRICTED", allowed_laboratory_codes: "CSE-LAB-01|PHY-2", is_mandatory: "true" };
+    const resolved = resolveCsvImportRow(masterConfigs["course-offerings"], source, restrictedLookups);
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.payload).toMatchObject({ laboratory_selection_mode: "RESTRICTED", laboratory_override_id: null, allowed_laboratory_ids: [laboratory.id, laboratory2.id] });
+    expect(resolved.payload).not.toHaveProperty("allowed_laboratory_codes");
+    const unknown = resolveCsvImportRow(masterConfigs["course-offerings"], { ...source, allowed_laboratory_codes: "UNKNOWN" }, restrictedLookups);
+    expect(unknown.errors.join(" ")).toContain("Unknown laboratory");
+    const duplicate = resolveCsvImportRow(masterConfigs["course-offerings"], { ...source, allowed_laboratory_codes: "PHY-2|PHY-2" }, restrictedLookups);
+    expect(duplicate.errors.join(" ")).toContain("Duplicate laboratory code");
   });
 
   it("resolves a combined teaching membership from deterministic section business keys", () => {

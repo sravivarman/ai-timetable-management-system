@@ -10,7 +10,9 @@ os.environ.setdefault("SECRET_KEY","test-secret-that-is-at-least-thirty-two-byte
 from sqlalchemy import select
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.authentication.models import Permission,Role
-from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.models import CourseOffering, CourseOfferingAllowedLaboratory
+from app.modules.courses.models import CourseEligibleLaboratory
+from app.modules.facilities.models import Laboratory
 from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation
 from app.modules.faculty_scheduling.models import FacultyAvailability
 from app.modules.laboratory_batches.models import StudentBatch
@@ -62,6 +64,18 @@ class TimetableEntryEndpointTests(unittest.TestCase):
    availability=db.scalar(select(FacultyAvailability).where(FacultyAvailability.id==self.fixture.availability.id));availability.availability_type="unavailable";db.commit()
   finally:db.close()
   unavailable=self.post(self.theory_payload(period=1));self.assertEqual(unavailable.status_code,409,unavailable.text);self.assertIn("unavailable",unavailable.json()["detail"])
+
+ def test_manual_entry_is_limited_to_the_offering_restricted_laboratories(self):
+  db=self.ctx.session_factory()
+  try:
+   alternative=Laboratory(laboratory_code="MANUAL-ALT",laboratory_name="Manual Alternative",room_number="M-ALT",owning_department_id=self.ctx.active_department.id)
+   db.add(alternative);db.flush()
+   db.add_all([CourseEligibleLaboratory(course_id=self.fixture.lab_course.id,laboratory_id=self.fixture.laboratory.id),CourseEligibleLaboratory(course_id=self.fixture.lab_course.id,laboratory_id=alternative.id)])
+   offering=db.get(CourseOffering,self.fixture.lab_offering.id);offering.laboratory_selection_mode="RESTRICTED";offering.laboratory_override_id=None
+   db.add(CourseOfferingAllowedLaboratory(course_offering_id=offering.id,laboratory_id=self.fixture.laboratory.id));db.commit();alternative_id=alternative.id
+  finally:db.close()
+  rejected=self.post(self.lab_payload(laboratory_id=str(alternative_id)));self.assertEqual(rejected.status_code,422,rejected.text);self.assertIn("permitted",rejected.json()["detail"])
+  accepted=self.post(self.lab_payload());self.assertEqual(accepted.status_code,201,accepted.text)
 
  def test_lifecycle_filters_and_permissions(self):
   self.assertEqual(self.post(self.theory_payload(),"hod").status_code,403);self.assertEqual(self.post(self.theory_payload(),"unauthorized").status_code,403)

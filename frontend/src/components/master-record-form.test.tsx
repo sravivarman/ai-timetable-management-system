@@ -63,6 +63,21 @@ describe("master record form", () => {
     expect(screen.getByText("Required laboratory is required.")).toBeInTheDocument();
   });
 
+  it("selects multiple course-eligible laboratories for RESTRICTED and rejects an empty set", async () => {
+    const user = userEvent.setup(); const submit = vi.fn();
+    renderWithProviders(<MasterRecordForm config={masterConfigs["course-offerings"]} initial={{ id: "off-1", course_id: "course-1", section_id: "section-1", academic_term_id: "term-1", is_mandatory: true, laboratory_selection_mode: "AUTO" }} lookupRecords={{ "/courses": [{ id: "course-1", course_code: "A9008", course_name: "Engineering Physics Laboratory", venue_requirement: "LABORATORY_ONLY", eligible_laboratory_ids: ["lab-3117", "lab-5014"] }], "/sections": [{ id: "section-1", display_label: "2026-27 I-I • ECE-A" }], "/academic-terms": [{ id: "term-1", academic_year: "2026-27", term_name: "I-I" }], "/laboratories": [{ id: "lab-1117", laboratory_code: "1117", laboratory_name: "Physics Lab" }, { id: "lab-3117", laboratory_code: "3117", laboratory_name: "Physics Lab" }, { id: "lab-5014", laboratory_code: "5014", laboratory_name: "Physics Lab" }] }} mode="edit" busy={false} onClose={vi.fn()} onSubmit={submit} />);
+    await user.click(screen.getByRole("radio", { name: /Restrict to selected laboratories/ }));
+    expect(screen.getByText("3117 · Physics Lab")).toBeInTheDocument();
+    expect(screen.getByText("5014 · Physics Lab")).toBeInTheDocument();
+    expect(screen.queryByText("1117 · Physics Lab")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText("Select at least one allowed laboratory.")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("3117 · Physics Lab"));
+    await user.click(screen.getByLabelText("5014 · Physics Lab"));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ laboratory_selection_mode: "RESTRICTED", laboratory_override_id: null, allowed_laboratory_ids: ["lab-3117", "lab-5014"] }));
+  });
+
   it("hides and clears laboratory assignment when the course changes to classroom-only", async () => {
     const user = userEvent.setup(); const submit = vi.fn();
     const initial = { id: "off-lab", course_id: "lab-course", section_id: "section-1", academic_term_id: "term-1", is_mandatory: true, laboratory_selection_mode: "FIXED", laboratory_override_id: "lab-2" };
@@ -104,6 +119,20 @@ describe("master record form", () => {
     expect(screen.getByRole("radio", { name: "Available except blocked periods" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Available only during selected periods" })).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /available all periods/i })).not.toBeInTheDocument();
+  });
+
+  it("defaults laboratory concurrency to Exclusive and requires capacity for Capacity Shared", async () => {
+    const user = userEvent.setup(); const submit = vi.fn();
+    renderWithProviders(<MasterRecordForm config={masterConfigs.laboratories} initial={{ id: "new-laboratory", laboratory_code: "WS-5A01", laboratory_name: "Engineering Workshop", room_number: "5A01", owning_department_id: "department-1" }} lookupRecords={{ "/departments": [{ id: "department-1", department_code: "MEC", department_name: "Mechanical Engineering" }] }} mode="create" busy={false} onClose={vi.fn()} onSubmit={submit} />);
+    expect(screen.getByRole("combobox", { name: /^Concurrent Usage Mode/ })).toHaveValue("EXCLUSIVE");
+    expect(screen.queryByLabelText(/^Capacity/)).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByRole("combobox", { name: /^Concurrent Usage Mode/ }), "CAPACITY_SHARED");
+    expect(screen.getByText(/combined student strength does not exceed capacity/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText(/Capacity is required and must be greater than zero/)).toBeInTheDocument();
+    await user.type(screen.getByLabelText(/^Capacity/), "60");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ concurrent_usage_mode: "CAPACITY_SHARED", capacity: 60 }));
   });
 
   it("creates an ordinary course offering without legacy common-theory controls", async () => {

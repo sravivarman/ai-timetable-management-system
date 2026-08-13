@@ -5,6 +5,7 @@ from app.modules.departments.models import Department
 from app.modules.programs.models import Program
 from app.modules.sections.models import Section
 from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.laboratories import resolve_effective_laboratories
 from app.modules.combined_teaching.models import CombinedTeachingGroup, CombinedTeachingGroupMember
 from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.facilities_constraints.models import SectionClassroomAssignment
@@ -92,10 +93,15 @@ def validate(db, request):
     for laboratory in eligible_laboratories:
      if not laboratory or not laboratory.is_active:add("LABORATORY_INACTIVE","Course eligibility references an inactive laboratory","course",course.id)
      elif laboratory.owning_department_id!=course.offering_department_id and not laboratory.is_shareable_across_departments:add("LABORATORY_NOT_SHAREABLE","Cross-department eligible laboratory is not shareable","course",course.id)
-    mode=offering.laboratory_selection_mode;override=offering.laboratory_override_id
-    if mode not in {"AUTO","PREFERRED","FIXED"} or mode=="AUTO" and override or mode in {"PREFERRED","FIXED"} and not override:add("INVALID_LABORATORY_OVERRIDE","Offering laboratory selection is invalid","course_offering",offering.id)
+    mode=offering.laboratory_selection_mode;override=offering.laboratory_override_id;restricted_ids=offering.allowed_laboratory_ids
+    if mode not in {"AUTO","PREFERRED","RESTRICTED","FIXED"} or mode=="AUTO" and override or mode in {"PREFERRED","FIXED"} and not override or mode=="RESTRICTED" and (override or not restricted_ids):add("INVALID_LABORATORY_OVERRIDE","Offering laboratory selection is invalid","course_offering",offering.id)
     if override and override not in eligible_ids:add("FIXED_LABORATORY_NOT_ELIGIBLE" if mode=="FIXED" else "PREFERRED_LABORATORY_NOT_ELIGIBLE","Offering laboratory is not eligible for the course","course_offering",offering.id)
-    candidate_laboratories=[db.get(Laboratory,override)] if mode=="FIXED" and override else usable_laboratories
+    for restricted_id in restricted_ids:
+     restricted=db.get(Laboratory,restricted_id)
+     if restricted_id not in eligible_ids:add("FIXED_LABORATORY_NOT_ELIGIBLE","Restricted offering laboratory is not eligible for the course","course_offering",offering.id)
+     elif not restricted or not restricted.is_active:add("LABORATORY_INACTIVE","Restricted offering laboratory is inactive","course_offering",offering.id)
+     elif restricted.owning_department_id!=course.offering_department_id and not restricted.is_shareable_across_departments:add("LABORATORY_NOT_SHAREABLE","Restricted cross-department laboratory is not shareable","course_offering",offering.id)
+    candidate_laboratories=resolve_effective_laboratories(db,course,offering)
     if candidate_laboratories and all(any(code=="RESOURCE_NO_AVAILABLE_PERIODS" for code,_,_ in availability_service.validate(db,"LABORATORY",laboratory.id,request.academic_term_id)) for laboratory in candidate_laboratories if laboratory):add("NO_AVAILABLE_ELIGIBLE_LABORATORY","No eligible laboratory has any available instructional period","course_offering",offering.id)
    if course and course.course_type in {"THEORY","CDC","PRACTICAL"}:
     executed+=1
@@ -118,6 +124,7 @@ def validate(db, request):
      if cfg.number_of_groups!=course.default_lab_group_count:
       warn("LAB_BATCH_COUNT_OVERRIDE","Offering-specific laboratory group count overrides the course default","course_offering",offering.id,{"course_default_lab_group_count":course.default_lab_group_count,"effective_lab_group_count":cfg.number_of_groups})
     for laboratory in usable_laboratories:
+     if laboratory.concurrent_usage_mode=="CAPACITY_SHARED" and not laboratory.capacity:add("RESOURCE_CAPACITY_INVALID","Capacity-shared laboratory requires a positive capacity","laboratory",laboratory.id)
      if days and laboratory.id not in validated_labs:
       validated_labs.add(laboratory.id);executed+=4
       aliases={"RESOURCE_INVALID_MODE":"LAB_INVALID_AVAILABILITY_MODE","RESOURCE_AVAILABILITY_CONFLICT":"LAB_AVAILABILITY_CONFLICT","RESOURCE_SELECTED_PERIODS_EMPTY":"LAB_SELECTED_PERIODS_EMPTY","RESOURCE_NO_AVAILABLE_PERIODS":"LAB_NO_AVAILABLE_PERIODS"}

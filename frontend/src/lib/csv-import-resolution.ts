@@ -91,8 +91,14 @@ export function resolveCsvImportRow(config: MasterConfig, source: Record<string,
     if (!spec) continue;
     const original = spec.columns.map((column) => input[column]?.trim()).filter(Boolean).join(" | ");
     if (!original) { internalRow[field.name] = ""; continue; }
-    if (field.name === "eligible_laboratory_ids") {
-      const codes = input.eligible_laboratory_codes.split(/[|;]/).map((value) => value.trim()).filter(Boolean);
+    if (["eligible_laboratory_ids", "allowed_laboratory_ids"].includes(field.name)) {
+      const column = field.name === "allowed_laboratory_ids" ? "allowed_laboratory_codes" : "eligible_laboratory_codes";
+      const codes = input[column].split(/[|;]/).map((value) => value.trim()).filter(Boolean);
+      const duplicateCodes = codes.filter((code, index) => codes.findIndex((value) => normalize(value) === normalize(code)) !== index);
+      if (duplicateCodes.length) {
+        references.push({ targetField: field.name, sourceColumns: spec.columns, original, error: `Duplicate laboratory code '${duplicateCodes[0]}'.` });
+        continue;
+      }
       const matches = codes.map((laboratory_code) => selectReference(lookups[spec.endpoint] ?? [], (record) => normalize(record.laboratory_code) === normalize(laboratory_code), "laboratory", ["eligible_laboratory_codes"], { ...input, eligible_laboratory_codes: laboratory_code }));
       const errors = matches.flatMap((match) => match.error ? [match.error] : []);
       references.push({ targetField: field.name, sourceColumns: spec.columns, original, resolvedLabel: errors.length ? undefined : matches.map((match) => readableRecordLabel(spec.endpoint, match.record!)).join("; "), error: errors.length ? errors.join(" ") : undefined });
@@ -120,6 +126,9 @@ export function resolveCsvImportRow(config: MasterConfig, source: Record<string,
   if (config.slug === "course-offerings") {
     const course = (lookups["/courses"] ?? []).find((record) => record.id === String(converted.payload.course_id ?? ""));
     if (course) normalizeOfferingLaboratoryPayload(converted.payload, course);
+    const allowed = Array.isArray(converted.payload.allowed_laboratory_ids) ? converted.payload.allowed_laboratory_ids.map(String) : [];
+    const eligible = new Set(Array.isArray(course?.eligible_laboratory_ids) ? course.eligible_laboratory_ids.map(String) : course?.default_laboratory_id ? [String(course.default_laboratory_id)] : []);
+    for (const identifier of allowed) if (!eligible.has(identifier)) references.push({ targetField: "allowed_laboratory_ids", sourceColumns: ["allowed_laboratory_codes"], original: input.allowed_laboratory_codes ?? "", error: "Allowed laboratory is not eligible for the selected course." });
   }
   const active = parseOptionalBoolean(source.is_active);
   const availability = config.slug === "laboratories" ? resolveLaboratoryAvailabilityCsv(input, lookups) : undefined;
@@ -162,6 +171,7 @@ export function relationSpec(field: MasterField): RelationSpec | undefined {
   const endpoint = field.lookup.endpoint;
   if (field.name === "course_offering_ids") return { endpoint, columns: ["section_codes"] };
   if (field.name === "eligible_laboratory_ids") return { endpoint, columns: ["eligible_laboratory_codes"] };
+  if (field.name === "allowed_laboratory_ids") return { endpoint, columns: ["allowed_laboratory_codes"] };
   if (field.name === "course_offering_id" || field.name === "laboratory_batch_configuration_id") return { endpoint, columns: ["course_code", "section_code", "academic_term_code"] };
   if (field.name === "required_with_main_faculty_id") return { endpoint, columns: ["required_main_faculty_code"] };
   if (field.name === "primary_classroom_id") return { endpoint, columns: ["primary_classroom_number"] };

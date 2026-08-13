@@ -20,7 +20,7 @@ def dc(id:UUID,db:Session=Depends(get_db)):s.delete(db,Classroom,id);return Resp
 @c.post("/{id}/restore",response_model=ClassroomResponse,dependencies=[cm])
 def rc(id:UUID,db:Session=Depends(get_db)):return s.restore(db,Classroom,id)
 @l.get("",dependencies=[lr])
-def ll(db:Session=Depends(get_db),search:str|None=None,owning_department_id:UUID|None=None,is_shareable_across_departments:bool|None=None,is_available_all_periods:bool|None=None,availability_mode:str|None=None,is_active:bool|None=None,page:int=1,page_size:int=20):return s.list(db,Laboratory,page,page_size,search,owning_department_id=owning_department_id,is_shareable_across_departments=is_shareable_across_departments,is_available_all_periods=is_available_all_periods,availability_mode=availability_mode,is_active=is_active)
+def ll(db:Session=Depends(get_db),search:str|None=None,owning_department_id:UUID|None=None,is_shareable_across_departments:bool|None=None,is_available_all_periods:bool|None=None,availability_mode:str|None=None,concurrent_usage_mode:str|None=None,is_active:bool|None=None,page:int=1,page_size:int=20):return s.list(db,Laboratory,page,page_size,search,owning_department_id=owning_department_id,is_shareable_across_departments=is_shareable_across_departments,is_available_all_periods=is_available_all_periods,availability_mode=availability_mode,concurrent_usage_mode=concurrent_usage_mode,is_active=is_active)
 @l.get("/{id}",response_model=LaboratoryResponse,dependencies=[lr])
 def gl(id:UUID,db:Session=Depends(get_db)):return s._get(db,Laboratory,id)
 @l.post("",response_model=LaboratoryResponse,status_code=201,dependencies=[lm])

@@ -29,8 +29,8 @@ export function serializeMasterDataExport(
     const values: Record<string, unknown> = {};
     const offeringCourse = config.slug === "course-offerings" ? requireRecord(lookups["/courses"] ?? [], record.course_id, "course", `${config.singular} row ${index + 1}`) : undefined;
     for (const field of config.fields) {
-      if (offeringCourse && !isLaboratoryCapableCourse(offeringCourse) && ["laboratory_selection_mode", "laboratory_override_id"].includes(field.name)) {
-        values[field.name === "laboratory_override_id" ? "laboratory_code" : field.name] = "";
+      if (offeringCourse && !isLaboratoryCapableCourse(offeringCourse) && ["laboratory_selection_mode", "laboratory_override_id", "allowed_laboratory_ids"].includes(field.name)) {
+        values[field.name === "laboratory_override_id" ? "laboratory_code" : field.name === "allowed_laboratory_ids" ? "allowed_laboratory_codes" : field.name] = "";
         continue;
       }
       const relation = relationSpec(field);
@@ -50,10 +50,10 @@ export function serializeMasterDataExport(
 function exportRelation(field: MasterField, identifier: unknown, lookups: ImportLookupRecords, context: string): Record<string, unknown> {
   const spec = relationSpec(field)!;
   if (identifier == null || identifier === "") return Object.fromEntries(spec.columns.map((column) => [column, ""]));
-  if (field.name === "eligible_laboratory_ids") {
+  if (["eligible_laboratory_ids", "allowed_laboratory_ids"].includes(field.name)) {
     const identifiers = Array.isArray(identifier) ? identifier : [];
     const codes = identifiers.map((value) => requiredValue(requireRecord(lookups["/laboratories"] ?? [], value, "laboratory", context), "laboratory_code", "laboratory", context));
-    return { eligible_laboratory_codes: codes.join("|") };
+    return { [field.name === "allowed_laboratory_ids" ? "allowed_laboratory_codes" : "eligible_laboratory_codes"]: codes.join("|") };
   }
   if (field.name === "course_offering_ids") {
     const identifiers = Array.isArray(identifier) ? identifier : [];

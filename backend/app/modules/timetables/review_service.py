@@ -21,6 +21,7 @@ from app.modules.sections.models import Section
 from app.modules.timetables.entry_schemas import TimetableEntryCreate
 from app.modules.timetables.entry_service import entry_service
 from app.modules.timetables.models import Timetable,TimetableEntry,TimetableEntryAudit,TimetableStatusHistory,TimetableVersion
+from app.modules.timetables.capacity import entry_capacity_demand,logical_capacity_key
 
 IMMUTABLE={"APPROVED","PUBLISHED","ARCHIVED"}
 
@@ -87,7 +88,15 @@ class TimetableReviewService:
    offering=offerings.get(entry.course_offering_id);course=courses.get(offering.course_id) if offering else None;member=faculty.get(entry.faculty_id or allocation_map.get(entry.laboratory_faculty_allocation_id));start=timings.get(entry.period_number);end=timings.get(entry.period_number+entry.session_length-1)
    if not start or not end:continue
    event=events.get(entry.combined_teaching_event_id);group=groups.get(event.combined_teaching_group_id) if event else None
-   by_day[entry.working_day_id].append({"entry_id":entry.id,"laboratory_rotation_block_id":entry.laboratory_rotation_block_id,"combined_teaching_event_id":entry.combined_teaching_event_id,"combined_teaching_group_code":group.group_code if group else None,"combined_section_codes":sorted(combined_sections.get(entry.combined_teaching_event_id,[])),"working_day_id":entry.working_day_id,"day_name":day_by_id.get(entry.working_day_id).day_name if day_by_id.get(entry.working_day_id) else "Unknown","period_number":entry.period_number,"period_numbers":list(range(entry.period_number,entry.period_number+entry.session_length)),"schedule_type":schedule_type,"start_time":start.start_time,"end_time":end.end_time,"course_code":course.course_code if course else "","course_name":course.course_name if course else "","course_type":course.course_type if course else entry.entry_type,"section_code":sections.get(entry.section_id).section_code if sections.get(entry.section_id) else "","faculty_code":member.faculty_code if member else None,"faculty_name":member.full_name if member else None,"classroom_room_number":classrooms.get(entry.classroom_id).room_number if classrooms.get(entry.classroom_id) else None,"laboratory_code":labs.get(entry.laboratory_id).laboratory_code if labs.get(entry.laboratory_id) else None,"laboratory_name":labs.get(entry.laboratory_id).laboratory_name if labs.get(entry.laboratory_id) else None,"batch_name":batches.get(entry.student_batch_id).batch_name if batches.get(entry.student_batch_id) else None,"session_length":entry.session_length,"entry_status":"LOCKED" if entry.is_locked else "MANUAL" if entry.is_manual else "GENERATED","is_manual":entry.is_manual,"is_locked":entry.is_locked})
+   laboratory=labs.get(entry.laboratory_id);demand=entry_capacity_demand(db,entry) if laboratory else None;occupancies=[]
+   if laboratory:
+    for period in range(entry.period_number,entry.period_number+entry.session_length):
+     logical={}
+     for other in all_entries:
+      if other.laboratory_id==entry.laboratory_id and other.working_day_id==entry.working_day_id and other.period_number<=period<=other.period_number+other.session_length-1:logical.setdefault(logical_capacity_key(other),entry_capacity_demand(db,other))
+     occupancies.append(sum(logical.values()))
+   occupied=max(occupancies,default=None);capacity=laboratory.capacity if laboratory else None
+   by_day[entry.working_day_id].append({"entry_id":entry.id,"laboratory_rotation_block_id":entry.laboratory_rotation_block_id,"combined_teaching_event_id":entry.combined_teaching_event_id,"combined_teaching_group_code":group.group_code if group else None,"combined_section_codes":sorted(combined_sections.get(entry.combined_teaching_event_id,[])),"working_day_id":entry.working_day_id,"day_name":day_by_id.get(entry.working_day_id).day_name if day_by_id.get(entry.working_day_id) else "Unknown","period_number":entry.period_number,"period_numbers":list(range(entry.period_number,entry.period_number+entry.session_length)),"schedule_type":schedule_type,"start_time":start.start_time,"end_time":end.end_time,"course_code":course.course_code if course else "","course_name":course.course_name if course else "","course_type":course.course_type if course else entry.entry_type,"section_code":sections.get(entry.section_id).section_code if sections.get(entry.section_id) else "","faculty_code":member.faculty_code if member else None,"faculty_name":member.full_name if member else None,"classroom_room_number":classrooms.get(entry.classroom_id).room_number if classrooms.get(entry.classroom_id) else None,"laboratory_code":laboratory.laboratory_code if laboratory else None,"laboratory_name":laboratory.laboratory_name if laboratory else None,"batch_name":batches.get(entry.student_batch_id).batch_name if batches.get(entry.student_batch_id) else None,"capacity_demand":demand,"resource_capacity":capacity,"occupied_capacity":occupied,"available_capacity":max(0,capacity-occupied) if capacity is not None and occupied is not None else None,"concurrent_usage_mode":laboratory.concurrent_usage_mode if laboratory else None,"session_length":entry.session_length,"entry_status":"LOCKED" if entry.is_locked else "MANUAL" if entry.is_manual else "GENERATED","is_manual":entry.is_manual,"is_locked":entry.is_locked})
   return {"version_id":version.id,"view_type":view_type,"resource_id":resource_id,"schedule_type":schedule_type,"days":[{"working_day_id":day.id,"day_name":day.day_name,"sequence_number":day.sequence_number,"entries":sorted(by_day[day.id],key=lambda x:(x["period_number"],str(x["entry_id"]))) } for day in days]}
 
  def move(self,db,entry,payload,user):
@@ -190,7 +199,7 @@ class TimetableReviewService:
   if not db.get(Timetable,timetable_id):raise HTTPException(404,"Timetable not found")
   return list(db.scalars(select(TimetableStatusHistory).where(TimetableStatusHistory.timetable_id==timetable_id).order_by(TimetableStatusHistory.created_at,TimetableStatusHistory.id)))
 
- def free_resources(self,db,version_id,kind,day_id,period):
+ def free_resources(self,db,version_id,kind,day_id,period,section_id=None,student_batch_id=None):
   _,timetable=self._context(db,version_id);day=db.get(WorkingDay,day_id)
   if not day or not day.is_active or not day.is_working_day:raise HTTPException(422,"Working day must be active")
   occupied=entry_service._overlapping if hasattr(entry_service,"_overlapping") else None;entries=list(db.scalars(select(TimetableEntry).where(TimetableEntry.timetable_version_id==version_id,TimetableEntry.working_day_id==day_id,TimetableEntry.period_number<=period,(TimetableEntry.period_number+TimetableEntry.session_length-1)>=period)))
@@ -199,7 +208,26 @@ class TimetableReviewService:
   elif kind=="classroom":
    used={x.classroom_id for x in entries if x.classroom_id};items=[{"id":str(x.id),"room_number":x.room_number,"room_name":x.room_name} for x in db.scalars(select(Classroom).where(Classroom.is_active.is_(True),Classroom.id.not_in(used)).order_by(Classroom.room_number)) if availability_service.is_available(db,"CLASSROOM",x.id,timetable.academic_term_id,day_id,period)]
   else:
-   used={x.laboratory_id for x in entries if x.laboratory_id};available=[x for x in db.scalars(select(Laboratory).where(Laboratory.is_active.is_(True),Laboratory.id.not_in(used)).order_by(Laboratory.laboratory_code)) if availability_service.is_available(db,"LABORATORY",x.id,timetable.academic_term_id,day_id,period)];items=[{"id":str(x.id),"laboratory_code":x.laboratory_code,"laboratory_name":x.laboratory_name} for x in available]
+   required=0
+   if student_batch_id:
+    batch=db.get(StudentBatch,student_batch_id);required=batch.student_count if batch else 0
+   elif section_id:
+    section=db.get(Section,section_id);required=section.student_strength if section else 0
+   items=[]
+   for laboratory in db.scalars(select(Laboratory).where(Laboratory.is_active.is_(True)).order_by(Laboratory.laboratory_code)):
+    if not availability_service.is_available(db,"LABORATORY",laboratory.id,timetable.academic_term_id,day_id,period):continue
+    logical={}
+    for entry in entries:
+     if entry.laboratory_id==laboratory.id:logical.setdefault(logical_capacity_key(entry),entry_capacity_demand(db,entry))
+    occupied=sum(logical.values())
+    if laboratory.concurrent_usage_mode=="EXCLUSIVE":
+     if logical:continue
+     capacity=laboratory.capacity;available_capacity=capacity
+     if capacity is not None and capacity<required:continue
+    else:
+     capacity=int(laboratory.capacity or 0);available_capacity=max(0,capacity-occupied)
+     if available_capacity<required or available_capacity<=0:continue
+    items.append({"id":str(laboratory.id),"laboratory_code":laboratory.laboratory_code,"laboratory_name":laboratory.laboratory_name,"concurrent_usage_mode":laboratory.concurrent_usage_mode,"capacity":capacity,"occupied":occupied,"available":available_capacity,"required":required,"usable":available_capacity is None or available_capacity>=required})
   return {"version_id":version_id,"working_day_id":day_id,"period_number":period,"items":items}
 
  def conflicts(self,db,version_id):
@@ -216,8 +244,23 @@ class TimetableReviewService:
    left_faculties=entry_faculties(left);right_faculties=entry_faculties(right)
    synchronized=left.laboratory_rotation_block_id is not None and left.laboratory_rotation_block_id==right.laboratory_rotation_block_id and left.student_batch_id!=right.student_batch_id
    same_combined=left.combined_teaching_event_id is not None and left.combined_teaching_event_id==right.combined_teaching_event_id
-   for kind,clash in (("section",left.section_id==right.section_id and not synchronized),("faculty",not same_combined and bool(left_faculties&right_faculties)),("classroom",not same_combined and left.classroom_id is not None and left.classroom_id==right.classroom_id),("laboratory",not same_combined and left.laboratory_id is not None and left.laboratory_id==right.laboratory_id),("batch",left.student_batch_id is not None and left.student_batch_id==right.student_batch_id)):
+   shared_laboratory=left.laboratory_id and left.laboratory_id==right.laboratory_id and (db.get(Laboratory,left.laboratory_id).concurrent_usage_mode=="CAPACITY_SHARED")
+   for kind,clash in (("section",left.section_id==right.section_id and not synchronized),("faculty",not same_combined and bool(left_faculties&right_faculties)),("classroom",not same_combined and left.classroom_id is not None and left.classroom_id==right.classroom_id),("laboratory",not same_combined and not shared_laboratory and left.laboratory_id is not None and left.laboratory_id==right.laboratory_id),("batch",left.student_batch_id is not None and left.student_batch_id==right.student_batch_id)):
     if clash:add(f"{kind}_clash",[left,right],f"Overlapping {kind} usage")
+  shared_labs={x.id:x for x in db.scalars(select(Laboratory).where(Laboratory.concurrent_usage_mode=="CAPACITY_SHARED"))}
+  for laboratory_id,laboratory in shared_labs.items():
+   for day_id in {entry.working_day_id for entry in entries if entry.laboratory_id==laboratory_id}:
+    for period in range(1,8):
+     participants=[entry for entry in entries if entry.laboratory_id==laboratory_id and entry.working_day_id==day_id and entry.period_number<=period<=entry.period_number+entry.session_length-1];logical={}
+     for entry in participants:logical.setdefault(logical_capacity_key(entry),entry_capacity_demand(db,entry))
+     total=sum(logical.values())
+     if total>int(laboratory.capacity or 0):
+      participant_labels=[]
+      for entry in participants:
+       section=db.get(Section,entry.section_id);batch=db.get(StudentBatch,entry.student_batch_id) if entry.student_batch_id else None
+       label=" / ".join(value for value in (section.section_code if section else None,batch.batch_name if batch else "Full section") if value)
+       if label and label not in participant_labels:participant_labels.append(label)
+      add("RESOURCE_CAPACITY_EXCEEDED",participants,f"{laboratory.laboratory_code} capacity {laboratory.capacity} is exceeded by {total-int(laboratory.capacity or 0)} students in period {period} (occupancy {total}; participants: {', '.join(participant_labels)})")
   days={x.id:x.day_name for x in db.scalars(select(WorkingDay))}
   seen_availability=set()
   for entry in entries:

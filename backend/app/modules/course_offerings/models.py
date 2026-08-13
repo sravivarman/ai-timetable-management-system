@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
 from app.db.base import Base
@@ -16,7 +16,8 @@ class CourseOffering(Base):
         UniqueConstraint("course_id", "section_id", "academic_term_id", name="uq_course_offering_course_section_term"),
         CheckConstraint(
             "(laboratory_selection_mode = 'AUTO' AND laboratory_override_id IS NULL) OR "
-            "(laboratory_selection_mode IN ('PREFERRED', 'FIXED') AND laboratory_override_id IS NOT NULL)",
+            "(laboratory_selection_mode IN ('PREFERRED', 'FIXED') AND laboratory_override_id IS NOT NULL) OR "
+            "(laboratory_selection_mode = 'RESTRICTED' AND laboratory_override_id IS NULL)",
             name="ck_course_offering_laboratory_selection",
         ),
     )
@@ -36,6 +37,41 @@ class CourseOffering(Base):
     laboratory_override_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("laboratories.id", ondelete="RESTRICT"), index=True
     )
+    allowed_laboratory_links: Mapped[list["CourseOfferingAllowedLaboratory"]] = relationship(
+        back_populates="course_offering", lazy="selectin"
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    @property
+    def allowed_laboratory_ids(self) -> list[UUID]:
+        return [
+            link.laboratory_id
+            for link in sorted(
+                (item for item in self.allowed_laboratory_links if item.is_active),
+                key=lambda item: (item.preference_priority, str(item.laboratory_id)),
+            )
+        ]
+
+
+class CourseOfferingAllowedLaboratory(Base):
+    """Offering-specific hard subset of the course's capable laboratories."""
+
+    __tablename__ = "course_offering_allowed_laboratories"
+    __table_args__ = (
+        UniqueConstraint("course_offering_id", "laboratory_id", name="uq_course_offering_allowed_laboratory"),
+        CheckConstraint("preference_priority >= 1", name="ck_course_offering_allowed_laboratory_priority"),
+    )
+
+    course_offering_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("course_offerings.id", ondelete="CASCADE"), primary_key=True
+    )
+    laboratory_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("laboratories.id", ondelete="RESTRICT"), primary_key=True
+    )
+    preference_priority: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    course_offering: Mapped[CourseOffering] = relationship(back_populates="allowed_laboratory_links")

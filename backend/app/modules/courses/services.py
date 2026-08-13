@@ -65,6 +65,20 @@ class CourseService:
             data.get("default_laboratory_id"),
             requested_eligible_ids is None,
         )
+        if requested_eligible_ids is not None:
+            from app.modules.course_offerings.models import CourseOffering, CourseOfferingAllowedLaboratory
+            restricted_ids = set(db.scalars(
+                select(CourseOfferingAllowedLaboratory.laboratory_id)
+                .join(CourseOffering, CourseOffering.id == CourseOfferingAllowedLaboratory.course_offering_id)
+                .where(
+                    CourseOffering.course_id == course.id,
+                    CourseOffering.laboratory_selection_mode == "RESTRICTED",
+                    CourseOffering.is_active.is_(True),
+                    CourseOfferingAllowedLaboratory.is_active.is_(True),
+                )
+            ))
+            if not restricted_ids.issubset(set(eligible_ids)):
+                raise HTTPException(status_code=422, detail="Course eligibility cannot remove a laboratory used by an active RESTRICTED offering")
         self._normalize_schedule_data(data)
         self._ensure_active_department(db, data["offering_department_id"])
         if "course_code" in changes:

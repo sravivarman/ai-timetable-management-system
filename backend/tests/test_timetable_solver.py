@@ -15,7 +15,7 @@ from app.modules.authentication.models import Permission,Role
 from app.modules.courses.models import Course, CourseEligibleLaboratory
 from app.modules.facilities.models import Laboratory
 from app.modules.resource_availability.models import ResourceAvailabilitySlot
-from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.models import CourseOffering, CourseOfferingAllowedLaboratory
 from app.modules.faculty.models import Faculty
 from app.modules.faculty_allocations.models import LaboratoryFacultyAllocation, TheoryFacultyAllocation
 from app.modules.faculty_scheduling.models import FacultyAvailability
@@ -94,6 +94,37 @@ class TimetableSolverTests(unittest.TestCase):
   finally:db.close()
   self.build()
   response=self.solve();self.assertEqual(response.status_code,201,response.text);self.assertEqual(response.json()["status"],"INFEASIBLE")
+
+ def test_restricted_offering_snapshot_and_solver_never_use_course_level_fallback(self):
+  db=self.ctx.session_factory()
+  try:
+   allowed=Laboratory(laboratory_code="TST-ALLOWED",laboratory_name="Allowed Physics Laboratory",room_number="T-203",owning_department_id=self.ctx.active_department.id)
+   excluded=Laboratory(laboratory_code="TST-EXCLUDED",laboratory_name="Excluded Physics Laboratory",room_number="T-204",owning_department_id=self.ctx.active_department.id)
+   db.add_all([allowed,excluded]);db.flush()
+   db.add_all([
+    CourseEligibleLaboratory(course_id=self.fixture.lab_course.id,laboratory_id=self.fixture.laboratory.id,preference_priority=1),
+    CourseEligibleLaboratory(course_id=self.fixture.lab_course.id,laboratory_id=allowed.id,preference_priority=2),
+    CourseEligibleLaboratory(course_id=self.fixture.lab_course.id,laboratory_id=excluded.id,preference_priority=3),
+   ])
+   offering=db.get(CourseOffering,self.fixture.lab_offering.id);offering.laboratory_selection_mode="RESTRICTED";offering.laboratory_override_id=None
+   db.add_all([
+    CourseOfferingAllowedLaboratory(course_offering_id=offering.id,laboratory_id=self.fixture.laboratory.id,preference_priority=1),
+    CourseOfferingAllowedLaboratory(course_offering_id=offering.id,laboratory_id=allowed.id,preference_priority=2),
+   ])
+   existing={(slot.working_day_id,slot.period_number) for slot in db.scalars(select(ResourceAvailabilitySlot).where(ResourceAvailabilitySlot.resource_type=="LABORATORY",ResourceAvailabilitySlot.resource_id==self.fixture.laboratory.id,ResourceAvailabilitySlot.academic_term_id==self.fixture.term.id))}
+   for day in db.scalars(select(WorkingDay).where(WorkingDay.is_active.is_(True),WorkingDay.is_working_day.is_(True))):
+    for period in range(1,8):
+     if (day.id,period) not in existing:db.add(ResourceAvailabilitySlot(resource_type="LABORATORY",resource_id=self.fixture.laboratory.id,academic_term_id=self.fixture.term.id,working_day_id=day.id,period_number=period,availability_type="BLOCKED"))
+   db.commit();allowed_id=allowed.id;excluded_id=excluded.id
+  finally:db.close()
+  first=self.build().json();second=self.build().json();self.assertEqual((first["id"],first["input_hash"]),(second["id"],second["input_hash"]))
+  item=next(value for value in first["snapshot_json"]["course_offerings"] if value["id"]==str(self.fixture.lab_offering.id))
+  self.assertEqual(item["laboratory_selection_mode"],"RESTRICTED");self.assertEqual(item["allowed_laboratory_ids"],[str(self.fixture.laboratory.id),str(allowed_id)]);self.assertEqual(set(item["eligible_laboratory_ids"]),{str(self.fixture.laboratory.id),str(allowed_id)});self.assertNotIn(str(excluded_id),item["eligible_laboratory_ids"])
+  response=self.solve();self.assertIn(response.json()["status"],{"FEASIBLE","OPTIMAL"},response.text)
+  db=self.ctx.session_factory()
+  try:
+   used={entry.laboratory_id for entry in db.scalars(select(TimetableEntry).where(TimetableEntry.course_offering_id==self.fixture.lab_offering.id))};self.assertEqual(used,{allowed_id});self.assertNotIn(excluded_id,used)
+  finally:db.close()
 
  def test_two_sections_use_two_eligible_laboratories_simultaneously(self):
   db=self.ctx.session_factory()

@@ -21,7 +21,8 @@ import app.modules.courses.models  # noqa: F401
 import app.modules.course_offerings.models  # noqa: F401
 from app.db.base import Base
 from app.modules.academic_terms.models import AcademicTerm
-from app.modules.course_offerings.models import CourseOffering
+from app.modules.course_offerings.models import CourseOffering, CourseOfferingAllowedLaboratory
+from app.modules.course_offerings.laboratories import resolve_effective_laboratories
 from app.modules.course_offerings.schemas import CourseOfferingBulkCreate, CourseOfferingCreate, CourseOfferingUpdate
 from app.modules.course_offerings.services import CourseOfferingService
 from app.modules.courses.models import Course, CourseEligibleLaboratory
@@ -116,3 +117,48 @@ class CourseOfferingServiceTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as invalid:
             self.service.update_offering(self.db, fixed.id, CourseOfferingUpdate(laboratory_override_id=outsider.id))
         self.assertEqual(invalid.exception.status_code, 422)
+
+    def test_restricted_laboratory_sets_are_normalized_validated_and_replaceable(self) -> None:
+        laboratories = [
+            Laboratory(laboratory_code=code, laboratory_name=f"Physics {code}", room_number=code, owning_department_id=self.department.id)
+            for code in ("1117", "3117", "5014")
+        ]
+        sections = [
+            Section(program_id=self.program.id, academic_term_id=self.term.id, section_name=name, section_code=f"CSE-{name}", student_strength=60)
+            for name in ("B", "C", "D")
+        ]
+        self.db.add_all([*laboratories, *sections]); self.db.flush()
+        self.db.add_all([
+            CourseEligibleLaboratory(course_id=self.lab.id, laboratory_id=laboratory.id, preference_priority=index)
+            for index, laboratory in enumerate(laboratories, start=1)
+        ]); self.db.commit()
+
+        one = self.service.create_offering(self.db, self.payload(self.lab.id, laboratory_selection_mode="RESTRICTED", allowed_laboratory_ids=[laboratories[0].id]))
+        two = self.service.create_offering(self.db, CourseOfferingCreate(course_id=self.lab.id, section_id=sections[0].id, academic_term_id=self.term.id, laboratory_selection_mode="RESTRICTED", allowed_laboratory_ids=[laboratories[1].id, laboratories[2].id]))
+        three = self.service.create_offering(self.db, CourseOfferingCreate(course_id=self.lab.id, section_id=sections[1].id, academic_term_id=self.term.id, laboratory_selection_mode="RESTRICTED", allowed_laboratory_ids=[item.id for item in laboratories]))
+        self.assertEqual(one.allowed_laboratory_ids, [laboratories[0].id])
+        self.assertEqual([item.id for item in resolve_effective_laboratories(self.db, self.lab, two)], [laboratories[1].id, laboratories[2].id])
+        self.assertEqual(len(three.allowed_laboratory_ids), 3)
+        updated = self.service.update_offering(self.db, two.id, CourseOfferingUpdate(allowed_laboratory_ids=[laboratories[2].id]))
+        self.assertEqual(updated.allowed_laboratory_ids, [laboratories[2].id])
+        self.assertEqual(self.db.scalar(select(func.count()).select_from(CourseOfferingAllowedLaboratory).where(CourseOfferingAllowedLaboratory.course_offering_id == two.id, CourseOfferingAllowedLaboratory.is_active.is_(True))), 1)
+
+    def test_restricted_laboratory_validation_rejects_invalid_sets(self) -> None:
+        eligible = Laboratory(laboratory_code="ELIGIBLE", laboratory_name="Eligible", room_number="E-1", owning_department_id=self.department.id)
+        inactive = Laboratory(laboratory_code="INACTIVE", laboratory_name="Inactive", room_number="I-1", owning_department_id=self.department.id, is_active=False)
+        other_department = Department(department_code="ECE", department_name="Electronics", short_name="ECE")
+        self.db.add_all([eligible, inactive, other_department]); self.db.flush()
+        nonshareable = Laboratory(laboratory_code="PRIVATE", laboratory_name="Private", room_number="P-1", owning_department_id=other_department.id, is_shareable_across_departments=False)
+        self.db.add(nonshareable); self.db.flush()
+        self.db.add_all([CourseEligibleLaboratory(course_id=self.lab.id, laboratory_id=item.id) for item in (eligible, inactive, nonshareable)]); self.db.commit()
+        for allowed_ids in ([], [inactive.id], [nonshareable.id]):
+            with self.subTest(allowed_ids=allowed_ids), self.assertRaises(HTTPException) as rejected:
+                self.service.create_offering(self.db, self.payload(self.lab.id, laboratory_selection_mode="RESTRICTED", allowed_laboratory_ids=allowed_ids))
+            self.assertEqual(rejected.exception.status_code, 422)
+        outsider = Laboratory(laboratory_code="OUTSIDE", laboratory_name="Outside", room_number="O-1", owning_department_id=self.department.id)
+        self.db.add(outsider); self.db.commit()
+        with self.assertRaises(HTTPException) as not_eligible:
+            self.service.create_offering(self.db, self.payload(self.lab.id, laboratory_selection_mode="RESTRICTED", allowed_laboratory_ids=[outsider.id]))
+        self.assertEqual(not_eligible.exception.status_code, 422)
+        with self.assertRaises(ValueError):
+            CourseOfferingCreate(course_id=self.lab.id, section_id=self.section.id, academic_term_id=self.term.id, laboratory_selection_mode="RESTRICTED", allowed_laboratory_ids=[eligible.id, eligible.id])
