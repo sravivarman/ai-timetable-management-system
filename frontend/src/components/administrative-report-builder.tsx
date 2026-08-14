@@ -13,6 +13,8 @@ import { queryKeys } from "@/lib/query-keys";
 import { sectionLabel, sectionTerm } from "@/lib/section-labels";
 import type { ReportDefinition, ReportRequest, ReportSort } from "@/lib/types";
 import { useToast } from "@/providers/toast-provider";
+import { normalizeEntityLookupParams, normalizeOptionalEntityFilter, normalizeReportFilters } from "@/lib/report-filter-normalization";
+import type { Program, Section } from "@/lib/types";
 
 const PREFIX = "administrative-";
 
@@ -26,6 +28,7 @@ export function AdministrativeReportBuilder({ initialReportKey }: { initialRepor
   const [sortFields, setSortFields] = useState<ReportSort[]>([]);
   const [page, setPage] = useState(1);
   const configured = useRef("");
+  const termDefaulted = useRef(new Set<string>());
   const definition = definitions.data?.find((item) => item.key === reportKey);
 
   useEffect(() => setReportKey(initialReportKey), [initialReportKey]);
@@ -34,24 +37,28 @@ export function AdministrativeReportBuilder({ initialReportKey }: { initialRepor
     configured.current = definition.key;
     setColumns(definition.default_columns);
     setSortFields(definition.default_sort);
-    setFilters({});
+    setFilters(defaultReportFilters(definition));
     setPage(1);
   }, [definition]);
 
   const terms = useQuery({ queryKey: queryKeys.academicTerms, queryFn: listAcademicTerms, retry: false });
   const departments = useQuery({ queryKey: queryKeys.departments("administrative-reports"), queryFn: masterApi.departments, retry: false });
-  const programs = useQuery({ queryKey: queryKeys.programs(`administrative-reports:${filters.department_id ?? "all"}`), queryFn: () => masterApi.programs(filters.department_id), retry: false });
-  const sections = useQuery({ queryKey: queryKeys.sections("administrative-reports", JSON.stringify({ term: filters.academic_term_id, department: filters.department_id, program: filters.program_id })), queryFn: () => masterApi.sections({ academic_term_id: filters.academic_term_id, department_id: filters.department_id, program_id: filters.program_id }), retry: false });
+  const lookupFilters = normalizeEntityLookupParams({ academic_term_id: filters.academic_term_id, department_id: filters.department_id, program_id: filters.program_id });
+  const programDepartmentId = normalizeOptionalEntityFilter(filters.department_id);
+  const programs = useQuery({ queryKey: queryKeys.programs(`administrative-reports:${programDepartmentId ?? "all"}`), queryFn: () => masterApi.programs(programDepartmentId), retry: false });
+  const sections = useQuery({ queryKey: queryKeys.sections("administrative-reports", JSON.stringify(lookupFilters)), queryFn: () => masterApi.sections(lookupFilters), retry: false });
   const courses = useQuery({ queryKey: queryKeys.report("administrative-course-options", {}), queryFn: () => masterApi.courses(), retry: false });
-  const faculty = useQuery({ queryKey: queryKeys.report("administrative-faculty-options", { department: filters.faculty_department_id ?? filters.department_id }), queryFn: () => masterApi.faculty(undefined, filters.faculty_department_id ?? filters.department_id), retry: false });
+  const facultyDepartmentId = normalizeOptionalEntityFilter(filters.faculty_department_id || filters.department_id);
+  const faculty = useQuery({ queryKey: queryKeys.report("administrative-faculty-options", { department: facultyDepartmentId }), queryFn: () => masterApi.faculty(undefined, facultyDepartmentId), retry: false });
 
   useEffect(() => {
-    if (!definition?.filters.some((item) => item.key === "academic_term_id") || filters.academic_term_id || !terms.data) return;
+    if (!definition?.filters.some((item) => item.key === "academic_term_id") || filters.academic_term_id || !terms.data || termDefaulted.current.has(definition.key)) return;
     const preferred = terms.data.items.find((item) => item.is_current) ?? terms.data.items.find((item) => item.is_active);
+    termDefaulted.current.add(definition.key);
     if (preferred) setFilters((current) => ({ ...current, academic_term_id: preferred.id }));
   }, [definition, filters.academic_term_id, terms.data]);
 
-  const request = useMemo<ReportRequest | null>(() => definition && columns.length ? ({ report_key: definition.key, filters: cleanFilters(filters), selected_columns: columns, sort_fields: sortFields, page, page_size: 50 }) : null, [definition, filters, columns, sortFields, page]);
+  const request = useMemo<ReportRequest | null>(() => definition && columns.length ? ({ report_key: definition.key, filters: normalizeReportFilters(filters), selected_columns: columns, sort_fields: sortFields, page, page_size: 50 }) : null, [definition, filters, columns, sortFields, page]);
   const configurationSignature = request ? JSON.stringify({ ...request, page: undefined, page_size: undefined }) : "";
   const [previewedSignature, setPreviewedSignature] = useState("");
   const preview = useMutation({ mutationFn: (payload: ReportRequest) => reportsApi.preview(payload), onSuccess: (_, payload) => setPreviewedSignature(JSON.stringify({ ...payload, page: undefined, page_size: undefined })), onError: (error) => notify(apiErrorMessage(error), "error") });
@@ -85,7 +92,7 @@ export function AdministrativeReportBuilder({ initialReportKey }: { initialRepor
     <Card className="mb-5"><SearchableSelect label="Report" value={reportKey} options={reportOptions} onChange={(value) => { setReportKey(value); router.replace(`/reports?report=${PREFIX}${value}`, { scroll: false }); }} /></Card>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
       <div className="space-y-5">
-        <ReportFilters definition={definition} filters={filters} setFilters={(next, changed) => { setFilters(next); setPage(1); if (["academic_term_id", "department_id", "program_id"].includes(changed)) setFilters(clearDependentFilters(next, changed)); }} options={{ terms: termOptions(terms.data?.items ?? []), departments: departmentOptions(departments.data?.items ?? []), programs: programOptions(programs.data?.items ?? []), sections: sectionOptions(sections.data?.items ?? [], terms.data?.items ?? []), courses: courseOptions(courses.data?.items ?? []), faculty: facultyOptions(faculty.data?.items ?? []) }} loading={{ academic_term_id: terms.isLoading, department_id: departments.isLoading, faculty_department_id: departments.isLoading, program_id: programs.isLoading, section_id: sections.isLoading, course_id: courses.isLoading, faculty_id: faculty.isLoading }} errors={{ academic_term_id: terms.error, department_id: departments.error, faculty_department_id: departments.error, program_id: programs.error, section_id: sections.error, course_id: courses.error, faculty_id: faculty.error }} />
+        <ReportFilters definition={definition} filters={filters} setFilters={(next, changed) => { setFilters(reconcileDependentFilters(next, changed, programs.data?.items ?? [], sections.data?.items ?? [])); setPage(1); }} options={{ terms: termOptions(terms.data?.items ?? []), departments: departmentOptions(departments.data?.items ?? []), programs: programOptions(programs.data?.items ?? []), sections: sectionOptions(sections.data?.items ?? [], terms.data?.items ?? []), courses: courseOptions(courses.data?.items ?? []), faculty: facultyOptions(faculty.data?.items ?? []) }} loading={{ academic_term_id: terms.isLoading, department_id: departments.isLoading, faculty_department_id: departments.isLoading, program_id: programs.isLoading, section_id: sections.isLoading, course_id: courses.isLoading, faculty_id: faculty.isLoading }} errors={{ academic_term_id: terms.error, department_id: departments.error, faculty_department_id: departments.error, program_id: programs.error, section_id: sections.error, course_id: courses.error, faculty_id: faculty.error }} />
         <ColumnPicker definition={definition} selected={columns} onChange={(value) => { setColumns(value); setPage(1); }} />
         <SortEditor definition={definition} value={sortFields} onChange={setSortFields} />
       </div>
@@ -107,7 +114,7 @@ type OptionCollection = { terms: SelectOption[]; departments: SelectOption[]; pr
 
 function ReportFilters({ definition, filters, setFilters, options, loading, errors }: { definition: ReportDefinition; filters: Record<string, string>; setFilters(value: Record<string, string>, changed: string): void; options: OptionCollection; loading: Record<string, boolean | undefined>; errors: Record<string, unknown> }) {
   const entityOptions: Record<string, SelectOption[]> = { academic_term_id: options.terms, department_id: options.departments, faculty_department_id: options.departments, program_id: options.programs, section_id: options.sections, course_id: options.courses, faculty_id: options.faculty };
-  return <Card title="Filters"><div className="grid gap-4 md:grid-cols-2">{definition.filters.map((filter) => filter.control === "entity" ? <SearchableSelect key={filter.key} label={filter.label} value={filters[filter.key] ?? ""} options={[{ value: "", label: "All" }, ...(entityOptions[filter.key] ?? [])]} onChange={(value) => setFilters({ ...filters, [filter.key]: value }, filter.key)} loading={Boolean(loading[filter.key])} error={errors[filter.key] ? apiErrorMessage(errors[filter.key]) : undefined} emptyMessage={`No ${filter.label.toLowerCase()} options available`} /> : <label key={filter.key}><span className="label">{filter.label}</span><select aria-label={filter.label} className="field" value={filters[filter.key] ?? ""} onChange={(event) => setFilters({ ...filters, [filter.key]: event.target.value }, filter.key)}><option value="">All</option>{filter.options.map((option) => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}</select></label>)}</div><button className="button-secondary mt-4 gap-2" onClick={() => setFilters({}, "clear")}><X className="h-4 w-4" />Clear Filters</button></Card>;
+  return <Card title="Filters"><div className="grid gap-4 md:grid-cols-2">{definition.filters.map((filter) => filter.control === "entity" ? <SearchableSelect key={filter.key} label={filter.label} value={filters[filter.key] ?? ""} options={[{ value: "", label: "All" }, ...(entityOptions[filter.key] ?? [])]} onChange={(value) => setFilters({ ...filters, [filter.key]: value }, filter.key)} loading={Boolean(loading[filter.key])} error={errors[filter.key] ? apiErrorMessage(errors[filter.key]) : undefined} emptyMessage={`No ${filter.label.toLowerCase()} options available`} /> : <label key={filter.key}><span className="label">{filter.label}</span><select aria-label={filter.label} className="field" value={filters[filter.key] ?? ""} onChange={(event) => setFilters({ ...filters, [filter.key]: event.target.value }, filter.key)}>{!filter.options.includes("ALL") && <option value="">All</option>}{filter.options.map((option) => <option key={option} value={option}>{option.replaceAll("_", " ")}</option>)}</select></label>)}</div><button className="button-secondary mt-4 gap-2" onClick={() => setFilters(defaultReportFilters(definition), "clear")}><X className="h-4 w-4" />Clear Filters</button></Card>;
 }
 
 function ColumnPicker({ definition, selected, onChange }: { definition: ReportDefinition; selected: string[]; onChange(value: string[]): void }) {
@@ -127,8 +134,20 @@ function Preview({ result, stale, onPage }: { result: Awaited<ReturnType<typeof 
 }
 
 function display(value: unknown) { return value === null || value === undefined || value === "" ? "—" : String(value); }
-function cleanFilters(filters: Record<string, string>) { return Object.fromEntries(Object.entries(filters).filter(([, value]) => value)); }
-function clearDependentFilters(filters: Record<string, string>, changed: string) { const next = { ...filters }; if (changed === "academic_term_id") delete next.section_id; if (changed === "department_id") { delete next.program_id; delete next.section_id; } if (changed === "program_id") delete next.section_id; return next; }
+function defaultReportFilters(definition: ReportDefinition): Record<string, string> { return definition.filters.some((item) => item.key === "status" && item.options.includes("ACTIVE")) ? { status: "ACTIVE" } : {}; }
+export function reconcileDependentFilters(filters: Record<string, string>, changed: string, programs: Program[], sections: Section[]) {
+  const next = { ...filters };
+  const selectedProgram = programs.find((item) => item.id === next.program_id);
+  const selectedSection = sections.find((item) => item.id === next.section_id);
+  if (changed === "department_id" && next.department_id) {
+    if (next.program_id && (!selectedProgram || selectedProgram.department_id !== next.department_id)) delete next.program_id;
+    const sectionProgram = programs.find((item) => item.id === selectedSection?.program_id);
+    if (next.section_id && (!selectedSection || !sectionProgram || sectionProgram.department_id !== next.department_id)) delete next.section_id;
+  }
+  if (changed === "program_id" && next.program_id && (!selectedSection || selectedSection.program_id !== next.program_id)) delete next.section_id;
+  if (changed === "academic_term_id" && next.academic_term_id && (!selectedSection || selectedSection.academic_term_id !== next.academic_term_id)) delete next.section_id;
+  return next;
+}
 function formatName(format: string) { return format === "xlsx" ? "Excel" : format === "docx" ? "Word" : format.toUpperCase(); }
 function termOptions(items: Awaited<ReturnType<typeof listAcademicTerms>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.academic_year} • ${item.term_name}`, description: item.is_current ? "Current" : item.is_active ? "Active" : "Historical" })); }
 function departmentOptions(items: Awaited<ReturnType<typeof masterApi.departments>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.department_code} • ${item.department_name}` })); }

@@ -89,6 +89,16 @@ class AdministrativeReportTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/reports/definitions", headers=self.context.headers["coordinator"]).status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/definitions", headers=self.context.headers["hod"]).status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/definitions", headers=self.context.headers["unauthorized"]).status_code, 403)
+        omitted = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["faculty_name"]), headers=self.context.headers["administrator"])
+        self.assertEqual(omitted.status_code, 200, omitted.text)
+        for empty_value in (None, "", "ALL"):
+            optional = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["faculty_name"], department_id=empty_value), headers=self.context.headers["administrator"])
+            self.assertEqual(optional.status_code, 200, optional.text)
+            self.assertNotIn("department_id", optional.json()["filters"])
+        valid = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["faculty_name"], department_id=str(self.department_id)), headers=self.context.headers["administrator"])
+        self.assertEqual(valid.status_code, 200, valid.text)
+        malformed = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["faculty_name"], department_id="abc"), headers=self.context.headers["administrator"])
+        self.assertEqual(malformed.status_code, 422)
         invalid = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["faculty_name", "not_a_column"]), headers=self.context.headers["administrator"])
         self.assertEqual(invalid.status_code, 422)
         invalid_filter = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["faculty_name"], academic_term_id=str(self.term_id)), headers=self.context.headers["administrator"])
@@ -165,6 +175,36 @@ class AdministrativeReportTests(unittest.TestCase):
         pdf = self.client.post("/api/v1/reports/export?format=pdf", json=payload, headers=self.context.headers["administrator"])
         self.assertTrue(pdf.content.startswith(b"%PDF")); self.assertGreater(len(pdf.content), 1000)
         self.assertIn("attachment", csv_response.headers["content-disposition"])
+
+    def test_all_entity_filters_are_no_restriction_for_preview_and_exports(self):
+        payload = self.request("section_course_faculty", ["section_code", "course_code", "faculty_allocation_status"], academic_term_id=str(self.term_id), department_id=None, program_id="", section_id="ALL", course_id=None, status="ALL")
+        preview = self.client.post("/api/v1/reports/preview", json=payload, headers=self.context.headers["administrator"])
+        self.assertEqual(preview.status_code, 200, preview.text)
+        self.assertEqual(preview.json()["total"], 5)
+        self.assertEqual(preview.json()["filters"], {"academic_term_id": str(self.term_id), "status": "ALL"})
+        for export_format in ("xlsx", "csv", "docx", "pdf"):
+            exported = self.client.post(f"/api/v1/reports/export?format={export_format}", json=payload, headers=self.context.headers["administrator"])
+            self.assertEqual(exported.status_code, 200, exported.text[:300])
+
+    def test_foundation_departments_remain_available_to_faculty_master(self):
+        db = self.context.session_factory()
+        try:
+            expected = {}
+            for index, code in enumerate(("PHY", "CHE", "MAT", "ENG"), 1):
+                department = self.context.active_department.__class__(department_code=code, department_name={"PHY": "Physics", "CHE": "Chemistry", "MAT": "Mathematics", "ENG": "English"}[code], short_name=code)
+                db.add(department); db.flush()
+                member = Faculty(faculty_code=f"FOUND{index}", full_name=f"{department.department_name} Faculty", department_id=department.id, designation="Assistant Professor", institutional_email=f"{code.lower()}.reports@vce.ac.in", minimum_weekly_workload=0, maximum_weekly_workload=18)
+                db.add(member); expected[code] = department.id
+            db.commit()
+        finally: db.close()
+        unrestricted = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["department_code", "faculty_name"]), headers=self.context.headers["administrator"])
+        self.assertEqual(unrestricted.status_code, 200, unrestricted.text)
+        self.assertTrue(set(expected) <= {row["department_code"] for row in unrestricted.json()["rows"]})
+        for code, department_id in expected.items():
+            filtered = self.client.post("/api/v1/reports/preview", json=self.request("faculty_master", ["department_code", "faculty_name"], department_id=str(department_id)), headers=self.context.headers["administrator"])
+            self.assertEqual(filtered.status_code, 200, filtered.text)
+            self.assertEqual(filtered.json()["total"], 1)
+            self.assertEqual(filtered.json()["rows"][0]["department_code"], code)
 
 
 if __name__ == "__main__":

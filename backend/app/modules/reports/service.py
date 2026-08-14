@@ -33,6 +33,7 @@ from app.modules.reports.schemas import (
     ReportPreviewResponse,
     ReportRequest,
     SortField,
+    OPTIONAL_ENTITY_FILTER_KEYS,
 )
 from app.modules.sections.models import Section
 
@@ -46,6 +47,7 @@ ENTITY_FILTERS = {
     "faculty_id": Faculty,
     "faculty_department_id": Department,
 }
+assert set(ENTITY_FILTERS) == set(OPTIONAL_ENTITY_FILTER_KEYS)
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,13 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+OPTIONAL_ENTITY_FILTER_KEYS = frozenset({
+    "academic_term_id", "department_id", "program_id", "section_id",
+    "course_id", "faculty_id", "faculty_department_id",
+})
 
 
 class ColumnMetadata(BaseModel):
@@ -46,6 +52,29 @@ class ReportRequest(BaseModel):
     sort_fields: list[SortField] = Field(default_factory=list)
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=50, ge=1, le=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_optional_filters(cls, value):
+        if not isinstance(value, dict) or not isinstance(value.get("filters", {}), dict):
+            return value
+        normalized = dict(value)
+        filters = {}
+        for key, raw in value.get("filters", {}).items():
+            if raw is None or (isinstance(raw, str) and not raw.strip()):
+                continue
+            if key in OPTIONAL_ENTITY_FILTER_KEYS and isinstance(raw, str) and raw.strip().upper() == "ALL":
+                continue
+            if isinstance(raw, list):
+                items = [item for item in raw if item is not None and (not isinstance(item, str) or item.strip())]
+                if key in OPTIONAL_ENTITY_FILTER_KEYS:
+                    items = [item for item in items if not isinstance(item, str) or item.strip().upper() != "ALL"]
+                if not items:
+                    continue
+                raw = items
+            filters[key] = raw.strip() if isinstance(raw, str) else raw
+        normalized["filters"] = filters
+        return normalized
 
     @field_validator("selected_columns")
     @classmethod
