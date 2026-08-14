@@ -9,6 +9,7 @@ import app.db.models  # noqa: F401  # register every FK target before seeding/te
 
 from app.core.security import hash_password
 from app.core.config import settings
+from app.core.password_policy import validate_new_password
 from app.db.session import SessionLocal
 from app.modules.authentication.models import Permission, Role, User
 from app.modules.departments.models import Department
@@ -300,6 +301,7 @@ def seed() -> None:
             raise RuntimeError("Cannot seed Administrator: username 'administrator' belongs to another user")
         administrator = administrator_by_username or administrator_by_email
         if administrator is None:
+            validate_new_password(ADMIN_PASSWORD)
             administrator = User(
                 username=ADMIN_USERNAME,
                 email=ADMIN_EMAIL,
@@ -316,8 +318,8 @@ def seed() -> None:
         report_viewer = session.scalar(select(User).where(func.lower(User.username) == REPORT_VIEWER_USERNAME).options(selectinload(User.roles)))
         if report_viewer is None:
             configured_password = settings.report_viewer_initial_password
-            if configured_password is not None and len(configured_password) < 12:
-                raise RuntimeError("REPORT_VIEWER_INITIAL_PASSWORD must contain at least 12 characters")
+            if configured_password is not None:
+                validate_new_password(configured_password)
             password = configured_password or secrets.token_urlsafe(48)
             report_viewer = User(
                 username=REPORT_VIEWER_USERNAME,

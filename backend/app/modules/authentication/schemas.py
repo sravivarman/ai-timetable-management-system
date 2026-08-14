@@ -3,6 +3,8 @@
 from uuid import UUID
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.core.password_policy import NewPassword
+
 
 USERNAME_PATTERN = r"^[A-Za-z0-9._-]+$"
 
@@ -48,7 +50,7 @@ class RoleRead(RoleBase):
 class UserCreate(UsernameMixin):
     email: EmailStr
     full_name: str = Field(min_length=1, max_length=255)
-    password: str = Field(min_length=12, max_length=128)
+    password: NewPassword
     role_ids: list[UUID] = Field(default_factory=list)
 
 
@@ -56,7 +58,7 @@ class UserUpdate(BaseModel):
     username: str | None = Field(default=None, min_length=3, max_length=100, pattern=USERNAME_PATTERN)
     email: EmailStr | None = None
     full_name: str | None = Field(default=None, min_length=1, max_length=255)
-    password: str | None = Field(default=None, min_length=12, max_length=128)
+    password: NewPassword | None = None
     is_active: bool | None = None
     role_ids: list[UUID] | None = None
 
@@ -82,7 +84,7 @@ class LoginRequest(UsernameMixin):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
-    new_password: str = Field(min_length=12, max_length=128)
+    new_password: NewPassword
 
 
 class RefreshRequest(BaseModel):

@@ -6,13 +6,16 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg://postgres:postgres@lo
 os.environ.setdefault("SECRET_KEY", "test-secret-that-is-at-least-thirty-two-bytes")
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 import app.db.models  # noqa: F401 - register every ForeignKey target
+from app.core.password_policy import PASSWORD_MINIMUM_MESSAGE
+from app.core.security import hash_password
 from app.db.base import Base
-from app.modules.authentication.models import Role
-from app.modules.authentication.schemas import UserCreate, UserUpdate
+from app.modules.authentication.models import Role, User
+from app.modules.authentication.schemas import ChangePasswordRequest, UserCreate, UserUpdate
 from app.modules.authentication.services import authentication_service
 
 
@@ -67,6 +70,41 @@ class UserAccessModelTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             authentication_service.create_user(self.db, UserCreate(username="  SHARED  ", email="different@vce.ac.in", full_name="Duplicate", password="StrongPassword123", role_ids=[self.roles["Principal"].id]))
         self.assertEqual(raised.exception.status_code, 409)
+
+    def test_new_password_policy_rejects_seven_and_accepts_eight_or_more(self):
+        role_id = self.roles["Administrator"].id
+        for factory in (
+            lambda: UserCreate(username="short", email="short@vce.ac.in", full_name="Short", password="1234567", role_ids=[role_id]),
+            lambda: UserUpdate(password="1234567"),
+            lambda: ChangePasswordRequest(current_password="existing", new_password="1234567"),
+        ):
+            with self.assertRaises(ValidationError) as raised:
+                factory()
+            self.assertEqual(raised.exception.errors()[0]["msg"], PASSWORD_MINIMUM_MESSAGE)
+
+        for password in ("12345678", "LongerPassword123"):
+            payload = UserCreate(username=f"valid{len(password)}", email=f"valid{len(password)}@vce.ac.in", full_name="Valid", password=password, role_ids=[role_id])
+            self.assertEqual(payload.password, password)
+            self.assertEqual(UserUpdate(password=password).password, password)
+            self.assertEqual(ChangePasswordRequest(current_password="existing", new_password=password).new_password, password)
+
+    def test_existing_short_password_hash_remains_authenticatable(self):
+        legacy_password = "Short7!"
+        legacy = User(
+            username="legacy-user",
+            email="legacy@vce.ac.in",
+            full_name="Legacy User",
+            password_hash=hash_password(legacy_password),
+            roles=[self.roles["Administrator"]],
+        )
+        self.db.add(legacy)
+        self.db.commit()
+        original_hash = legacy.password_hash
+
+        authenticated = authentication_service.authenticate(self.db, legacy.username, legacy_password)
+
+        self.assertEqual(authenticated.id, legacy.id)
+        self.assertEqual(authenticated.password_hash, original_hash)
 
 
 if __name__ == "__main__":

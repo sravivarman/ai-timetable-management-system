@@ -7,6 +7,7 @@ import app.modules.authentication.models,app.modules.facilities.models
 from app.db.base import Base
 from app.modules.authentication.models import Permission,Role,User
 from app.core.security import verify_password
+from app.core.password_policy import PASSWORD_MINIMUM_MESSAGE
 from scripts import seed as seed_script
 
 class FacilitiesPermissionsTests(unittest.TestCase):
@@ -36,7 +37,7 @@ class FacilitiesPermissionsTests(unittest.TestCase):
   for role in ("HOD","Dean","Principal"):self.assertIn(("timetable_solver","read"),grants[role]);self.assertNotIn(("timetable_solver","run"),grants[role])
   self.assertEqual(self.db.scalar(select(func.count()).select_from(Permission).where(Permission.resource=="timetable_solver")),2)
  def test_seed_grants_idempotent_report_permission(self):
-  original=seed_script.SessionLocal;original_password=seed_script.settings.report_viewer_initial_password;seed_script.SessionLocal=sessionmaker(bind=self.engine);seed_script.settings.report_viewer_initial_password="ConfiguredViewer123"
+  original=seed_script.SessionLocal;original_password=seed_script.settings.report_viewer_initial_password;seed_script.SessionLocal=sessionmaker(bind=self.engine);seed_script.settings.report_viewer_initial_password="Passw0rd"
   try:
    seed_script.seed();first_hash=self.db.scalar(select(User.password_hash).where(User.username=="administrator"));seed_script.seed()
   finally:seed_script.SessionLocal=original;seed_script.settings.report_viewer_initial_password=original_password
@@ -44,5 +45,11 @@ class FacilitiesPermissionsTests(unittest.TestCase):
    grants={(p.resource,p.action) for p in self.db.scalar(select(Role).where(Role.name==name)).permissions}
    self.assertIn(("reports","read"),grants)
   self.assertEqual(self.db.scalar(select(func.count()).select_from(Permission).where(Permission.resource=="reports",Permission.action=="read")),1)
-  viewer_role=self.db.scalar(select(Role).where(Role.name=="REPORT_VIEWER"));viewer=self.db.scalar(select(User).where(User.username=="reportviewer"));self.assertEqual({(p.resource,p.action) for p in viewer_role.permissions},{("reports","read")});self.assertEqual([role.name for role in viewer.roles],["REPORT_VIEWER"]);self.assertTrue(viewer.is_active);self.assertTrue(verify_password("ConfiguredViewer123",viewer.password_hash))
+  viewer_role=self.db.scalar(select(Role).where(Role.name=="REPORT_VIEWER"));viewer=self.db.scalar(select(User).where(User.username=="reportviewer"));self.assertEqual({(p.resource,p.action) for p in viewer_role.permissions},{("reports","read")});self.assertEqual([role.name for role in viewer.roles],["REPORT_VIEWER"]);self.assertTrue(viewer.is_active);self.assertTrue(verify_password("Passw0rd",viewer.password_hash))
   administrator=self.db.scalar(select(User).where(User.username=="administrator"));self.assertEqual(administrator.email,"admin@vce.ac.in");self.assertEqual(administrator.password_hash,first_hash)
+ def test_seed_rejects_a_configured_password_shorter_than_eight(self):
+  original=seed_script.SessionLocal;original_password=seed_script.settings.report_viewer_initial_password;seed_script.SessionLocal=sessionmaker(bind=self.engine);seed_script.settings.report_viewer_initial_password="1234567"
+  try:
+   with self.assertRaises(Exception) as raised:seed_script.seed()
+  finally:seed_script.SessionLocal=original;seed_script.settings.report_viewer_initial_password=original_password
+  self.assertEqual(str(raised.exception),PASSWORD_MINIMUM_MESSAGE)

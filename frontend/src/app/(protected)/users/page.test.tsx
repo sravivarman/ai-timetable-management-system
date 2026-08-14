@@ -52,9 +52,29 @@ describe("approved login account administration", () => {
     await user.type(screen.getByLabelText("Full name"), "Dean Academics");
     await user.type(screen.getByLabelText("Email"), "dean@vce.ac.in");
     await user.selectOptions(screen.getByLabelText("Approved login role"), "dean-role");
-    await user.type(screen.getByLabelText("Password"), "StrongPassword123");
+    await user.type(screen.getByLabelText("Password"), "Passw0rd");
     await user.click(screen.getByRole("button", { name: "Save account" }));
-    await waitFor(() => expect(usersAdminApi.create).toHaveBeenCalledWith({ username: "deanacademics", email: "dean@vce.ac.in", full_name: "Dean Academics", password: "StrongPassword123", role_ids: ["dean-role"] }));
+    await waitFor(() => expect(usersAdminApi.create).toHaveBeenCalledWith({ username: "deanacademics", email: "dean@vce.ac.in", full_name: "Dean Academics", password: "Passw0rd", role_ids: ["dean-role"] }));
+  });
+
+  it("rejects seven-character passwords and enables submission at eight", async () => {
+    vi.mocked(usersAdminApi.create).mockResolvedValue({ ...administrator, id: "user-2" });
+    const user = userEvent.setup();
+    renderWithProviders(<UsersPage />);
+    await screen.findByText("System Administrator");
+    await user.click(screen.getByRole("button", { name: "Create login account" }));
+    await user.type(screen.getByLabelText("Username"), "principal2");
+    await user.type(screen.getByLabelText("Full name"), "Principal Two");
+    await user.type(screen.getByLabelText("Email"), "principal2@vce.ac.in");
+    await user.selectOptions(screen.getByLabelText("Approved login role"), "principal-role");
+    await user.type(screen.getByLabelText("Password"), "1234567");
+    expect(screen.getByRole("alert")).toHaveTextContent("Password must be at least 8 characters.");
+    expect(screen.getByRole("button", { name: "Save account" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Password"), "8");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save account" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Save account" }));
+    await waitFor(() => expect(usersAdminApi.create).toHaveBeenCalledWith(expect.objectContaining({ password: "12345678" })));
   });
 
   it("supports search, status changes, editing, password reset, and deletion", async () => {

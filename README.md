@@ -136,6 +136,8 @@ All API paths use the `/api/v1` prefix. After creating the initial user, use `PO
 
 Passwords are hashed with Argon2. Logout increments the user's token version, invalidating both the access and refresh tokens issued before logout.
 
+Newly created, changed, reset, or seeded passwords must contain at least 8 characters. This policy does not invalidate existing password hashes or impose a minimum during login.
+
 Usernames are trimmed, stored in lowercase, and unique case-insensitively. They accept letters, digits, `.`, `_`, and `-`. Report Viewer intentionally lacks `account_password.change_self`; its password can only be reset by an Administrator.
 
 ## Unified resource availability

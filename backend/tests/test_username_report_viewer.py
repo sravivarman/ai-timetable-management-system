@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.core.security import create_access_token, hash_password, verify_password
+from app.core.password_policy import PASSWORD_MINIMUM_MESSAGE
 from app.main import app
 from app.modules.authentication.models import Permission, Role, User
 from tests.facilities_test_support import create_facilities_test_context
@@ -22,9 +23,10 @@ class UsernameReportViewerTests(unittest.TestCase):
         try:
             reports_read = Permission(resource="reports", action="read", description="Read reports")
             users_manage = Permission(resource="users", action="manage", description="Manage users")
+            change_self = Permission(resource="account_password", action="change_self", description="Change own password")
             viewer_role = Role(name="REPORT_VIEWER", description="Read-only reports", permissions=[reports_read])
             administrator = db.scalar(select(Role).where(Role.name == "Administrator"))
-            administrator.permissions.append(users_manage)
+            administrator.permissions.extend([users_manage, change_self])
             self.viewer = User(username="reportviewer", email="viewer@vce.ac.in", full_name="Report Viewer", password_hash=hash_password("ViewerPassword123"), roles=[viewer_role])
             db.add_all([viewer_role, self.viewer])
             db.commit()
@@ -85,17 +87,43 @@ class UsernameReportViewerTests(unittest.TestCase):
 
     def test_administrator_can_reset_report_viewer_password(self) -> None:
         before = self.viewer.password_hash
-        response = self.client.put(f"/api/v1/users/{self.viewer.id}", headers=self.context.headers["administrator"], json={"password": "ResetByAdmin123"})
+        rejected = self.client.put(f"/api/v1/users/{self.viewer.id}", headers=self.context.headers["administrator"], json={"password": "1234567"})
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["detail"][0]["msg"], PASSWORD_MINIMUM_MESSAGE)
+        db = self.context.session_factory()
+        try:
+            self.assertEqual(db.get(User, self.viewer.id).password_hash, before)
+        finally:
+            db.close()
+
+        response = self.client.put(f"/api/v1/users/{self.viewer.id}", headers=self.context.headers["administrator"], json={"password": "Reset123"})
         self.assertEqual(response.status_code, 200)
         db = self.context.session_factory()
         try:
             updated = db.get(User, self.viewer.id)
             self.assertNotEqual(updated.password_hash, before)
-            self.assertTrue(verify_password("ResetByAdmin123", updated.password_hash))
+            self.assertTrue(verify_password("Reset123", updated.password_hash))
         finally:
             db.close()
-        login = self.client.post("/api/v1/auth/login", data={"username": "reportviewer", "password": "ResetByAdmin123"})
+        login = self.client.post("/api/v1/auth/login", data={"username": "reportviewer", "password": "Reset123"})
         self.assertEqual(login.status_code, 200)
+
+    def test_self_service_password_change_enforces_eight_characters(self) -> None:
+        headers = self.context.headers["administrator"]
+        rejected = self.client.post(
+            "/api/v1/auth/change-password",
+            headers=headers,
+            json={"current_password": "TestPassword123", "new_password": "1234567"},
+        )
+        self.assertEqual(rejected.status_code, 422)
+        self.assertEqual(rejected.json()["detail"][0]["msg"], PASSWORD_MINIMUM_MESSAGE)
+
+        accepted = self.client.post(
+            "/api/v1/auth/change-password",
+            headers=headers,
+            json={"current_password": "TestPassword123", "new_password": "NewPass8"},
+        )
+        self.assertEqual(accepted.status_code, 204)
 
 
 if __name__ == "__main__":

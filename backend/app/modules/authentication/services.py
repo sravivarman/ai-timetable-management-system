@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.password_policy import validate_new_password
 from app.core.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
 from app.modules.authentication.models import Role, User
 from app.modules.authentication.repositories import PermissionRepository, RoleRepository, UserRepository
@@ -51,6 +52,7 @@ class AuthenticationService:
         return user
 
     def create_user(self, db: Session, data: UserCreate) -> User:
+        validate_new_password(data.password)
         self._ensure_unique_username(db, data.username)
         self._ensure_unique_email(db, data.email)
         roles = self._roles_or_422(db, data.role_ids)
@@ -73,12 +75,14 @@ class AuthenticationService:
         for field, value in changes.items():
             setattr(user, field, value)
         if data.password is not None:
+            validate_new_password(data.password)
             user.password_hash, user.token_version = hash_password(data.password), user.token_version + 1
         if data.role_ids is not None:
             user.roles, user.token_version = self._roles_or_422(db, data.role_ids), user.token_version + 1
         return self.users.save(db, user)
 
     def change_password(self, db: Session, user: User, current_password: str, new_password: str) -> User:
+        validate_new_password(new_password)
         if not verify_password(current_password, user.password_hash):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
         user.password_hash = hash_password(new_password)
