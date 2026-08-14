@@ -25,7 +25,7 @@ class FacultyTests(unittest.TestCase):
   faculty_service.delete(self.db,f.id);self.assertFalse(faculty_service.get(self.db,f.id).is_active);faculty_service.restore(self.db,f.id);self.assertTrue(faculty_service.get(self.db,f.id).is_active)
   self.assertEqual(faculty_service.update(self.db,f.id,FacultyUpdate(faculty_code="vce002")).faculty_code,"VCE002")
  def test_optional_user_link_remains_supported(self):
-  user=User(email="faculty.link@vce.ac.in",full_name="Linked Faculty",password_hash="not-used");self.db.add(user);self.db.commit()
+  user=User(username="faculty-linked",email="faculty.link@vce.ac.in",full_name="Linked Faculty",password_hash="not-used");self.db.add(user);self.db.commit()
   faculty=faculty_service.create(self.db,self.payload(user_id=user.id));self.assertEqual(faculty.user_id,user.id)
  def test_seed_permissions(self):
   original=seed_script.SessionLocal;seed_script.SessionLocal=sessionmaker(bind=self.e)

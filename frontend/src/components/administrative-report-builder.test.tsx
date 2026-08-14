@@ -2,16 +2,16 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AdministrativeReportBuilder } from "@/components/administrative-report-builder";
-import { listAcademicTerms, masterApi, reportsApi } from "@/lib/api";
+import { reportsApi } from "@/lib/api";
 import type { ReportDefinition } from "@/lib/types";
 import { renderWithProviders } from "@/test/render";
 
 const replace = vi.fn();
+const authState = vi.hoisted(() => ({ reportViewer: false }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
+vi.mock("@/providers/auth-provider", () => ({ useAuth: () => ({ hasRole: (role: string) => authState.reportViewer && role === "REPORT_VIEWER" }) }));
 vi.mock("@/lib/api", () => ({
-  reportsApi: { definitions: vi.fn(), preview: vi.fn(), export: vi.fn() },
-  listAcademicTerms: vi.fn(),
-  masterApi: { departments: vi.fn(), programs: vi.fn(), sections: vi.fn(), courses: vi.fn(), faculty: vi.fn() },
+  reportsApi: { definitions: vi.fn(), filterOptions: vi.fn(), preview: vi.fn(), export: vi.fn() },
 }));
 
 const columns = [
@@ -31,20 +31,15 @@ const allEntityFilters = [
 ];
 const report = (key: string, title: string): ReportDefinition => ({ key, title, description: `${title} description`, layout_type: "TABULAR", columns, default_columns: ["faculty_code", "faculty_name"], filters: key === "theory_faculty_allocations" ? allEntityFilters : [{ key: "department_id", label: "Department", control: "entity", options: [] }], default_sort: [{ key: "department_name", direction: "asc" }], supported_formats: ["xlsx", "csv", "docx", "pdf"] });
 const definitions = [report("faculty_master", "Faculty Master"), report("course_offerings", "Course Offerings"), report("theory_faculty_allocations", "Theory Faculty Allocations"), report("activity_faculty_allocations", "Activity Faculty Allocations"), report("section_course_faculty", "Section-wise Course & Faculty Allocation"), report("faculty_workload", "Faculty Workload")];
-const page = <T,>(items: T[]) => ({ items, total: items.length, page: 1, page_size: 100, pages: items.length ? 1 : 0 });
 const preview = { report_key: "faculty_master", title: "Faculty Master", columns: columns.slice(0, 2), filters: {}, filter_summary: ["Department: CSE • Computer Science and Engineering"], sorting: [{ key: "department_name", direction: "asc" as const }], rows: [{ faculty_code: "VCE042", faculty_name: "Dr. R. Kumar" }], total: 1, page: 1, page_size: 50, pages: 1, configuration_signature: "signature" };
 
 describe("administrative report builder", () => {
   beforeEach(() => {
     vi.clearAllMocks(); replace.mockReset();
+    authState.reportViewer = false;
     vi.mocked(reportsApi.definitions).mockResolvedValue(definitions);
     vi.mocked(reportsApi.preview).mockResolvedValue(preview);
-    vi.mocked(listAcademicTerms).mockResolvedValue(page([{ id: "term-1", academic_year: "2026-27", term_name: "I-I", year_number: 1, semester_number: 1, is_active: true, is_current: true }]));
-    vi.mocked(masterApi.departments).mockResolvedValue(page([{ id: "dept-1", department_code: "CSE", department_name: "Computer Science and Engineering", short_name: "CSE", is_active: true }]));
-    vi.mocked(masterApi.programs).mockResolvedValue(page([{ id: "program-1", department_id: "dept-1", program_code: "BTECH-CSE", program_name: "B.Tech CSE", is_active: true }, { id: "program-2", department_id: "dept-2", program_code: "BTECH-ECE", program_name: "B.Tech ECE", is_active: true }]));
-    vi.mocked(masterApi.sections).mockResolvedValue(page([{ id: "section-1", program_id: "program-1", academic_term_id: "term-1", section_name: "A", section_code: "CSE-A", student_strength: 72, is_active: true }]));
-    vi.mocked(masterApi.courses).mockResolvedValue(page([{ id: "course-1", course_code: "CS301", course_name: "Operating Systems", offering_department_id: "dept-1", course_type: "THEORY", grouping_mode: "FULL_SECTION", venue_requirement: "CLASSROOM_ONLY", weekly_periods: 4, session_duration: 1, sessions_per_week: 4, default_group_count: 1, eligible_laboratory_ids: [], is_active: true }]));
-    vi.mocked(masterApi.faculty).mockResolvedValue(page([{ id: "faculty-1", faculty_code: "VCE042", full_name: "Dr. R. Kumar", department_id: "dept-1", designation: "Professor", institutional_email: "r.kumar@vce.ac.in", minimum_weekly_workload: 8, maximum_weekly_workload: 16, is_active: true }]));
+    vi.mocked(reportsApi.filterOptions).mockResolvedValue({ academic_terms: [{ id: "term-1", academic_year: "2026-27", term_name: "I-I", year_number: 1, semester_number: 1, is_active: true, is_current: true }], departments: [{ id: "dept-1", department_code: "CSE", department_name: "Computer Science and Engineering", short_name: "CSE", is_active: true }], programs: [{ id: "program-1", department_id: "dept-1", program_code: "BTECH-CSE", program_name: "B.Tech CSE", is_active: true }, { id: "program-2", department_id: "dept-2", program_code: "BTECH-ECE", program_name: "B.Tech ECE", is_active: true }], sections: [{ id: "section-1", program_id: "program-1", academic_term_id: "term-1", section_name: "A", section_code: "CSE-A", student_strength: 72, is_active: true }], courses: [{ id: "course-1", course_code: "CS301", course_name: "Operating Systems", offering_department_id: "dept-1", course_type: "THEORY", grouping_mode: "FULL_SECTION", venue_requirement: "CLASSROOM_ONLY", weekly_periods: 4, session_duration: 1, sessions_per_week: 4, default_group_count: 1, eligible_laboratory_ids: [], is_active: true }], faculty: [{ id: "faculty-1", faculty_code: "VCE042", full_name: "Dr. R. Kumar", department_id: "dept-1", designation: "Professor", institutional_email: "r.kumar@vce.ac.in", minimum_weekly_workload: 8, maximum_weekly_workload: 16, is_active: true }] });
     vi.mocked(reportsApi.export).mockResolvedValue({ blob: new Blob(["report"]), filename: "report.csv" });
     Object.defineProperty(URL, "createObjectURL", { configurable: true, value: vi.fn(() => "blob:report") });
     Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: vi.fn() });
@@ -60,6 +55,14 @@ describe("administrative report builder", () => {
     expect(screen.getByRole("checkbox", { name: "Faculty Name" })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "Designation" })).not.toBeChecked();
     for (const name of ["Excel", "CSV", "Word", "PDF"]) expect(screen.getByRole("button", { name: `Export ${name}` })).toBeInTheDocument();
+  });
+
+  it("keeps all report downloads visible but hides operational tools for Report Viewer", async () => {
+    authState.reportViewer = true;
+    renderWithProviders(<AdministrativeReportBuilder initialReportKey="faculty_master" />);
+    await screen.findByRole("button", { name: "Export Excel" });
+    expect(screen.queryByRole("link", { name: "Operational reports" })).not.toBeInTheDocument();
+    for (const name of ["Excel", "CSV", "Word", "PDF"]) expect(screen.getByRole("button", { name: `Export ${name}` })).toBeEnabled();
   });
 
   it("supports select all, clear, restore defaults, and accessible reordering", async () => {
@@ -113,8 +116,7 @@ describe("administrative report builder", () => {
   it("normalizes every entity selector All value before lookup and preview requests", async () => {
     const user = userEvent.setup(); renderWithProviders(<AdministrativeReportBuilder initialReportKey="theory_faculty_allocations" />);
     await screen.findByRole("combobox", { name: "Program" });
-    await waitFor(() => expect(masterApi.programs).toHaveBeenCalledWith(undefined));
-    expect(masterApi.sections).toHaveBeenCalledWith({});
+    await waitFor(() => expect(reportsApi.filterOptions).toHaveBeenCalled());
     for (const label of ["Academic Term", "Department", "Program", "Section", "Course", "Faculty", "Faculty Department"]) {
       const selector = screen.getByRole("combobox", { name: label });
       await user.click(selector);
@@ -123,8 +125,7 @@ describe("administrative report builder", () => {
     await user.click(screen.getByRole("button", { name: "Preview Report" }));
     await waitFor(() => expect(reportsApi.preview).toHaveBeenCalled());
     expect(vi.mocked(reportsApi.preview).mock.calls.at(-1)![0].filters).toEqual({});
-    expect(masterApi.programs).not.toHaveBeenCalledWith("");
-    expect(masterApi.sections).not.toHaveBeenCalledWith(expect.objectContaining({ department_id: "" }));
+    expect(reportsApi.filterOptions).toHaveBeenCalledTimes(1);
   });
 
   it("uses the same normalized All configuration for every export format", async () => {
@@ -141,7 +142,7 @@ describe("administrative report builder", () => {
 
   it("preserves valid narrower children for parent All but clears incompatible children", async () => {
     const user = userEvent.setup();
-    vi.mocked(masterApi.departments).mockResolvedValue(page([{ id: "dept-1", department_code: "CSE", department_name: "Computer Science and Engineering", short_name: "CSE", is_active: true }, { id: "dept-2", department_code: "ECE", department_name: "Electronics and Communication Engineering", short_name: "ECE", is_active: true }]));
+    vi.mocked(reportsApi.filterOptions).mockResolvedValue({ ...(await reportsApi.filterOptions()), departments: [{ id: "dept-1", department_code: "CSE", department_name: "Computer Science and Engineering", short_name: "CSE", is_active: true }, { id: "dept-2", department_code: "ECE", department_name: "Electronics and Communication Engineering", short_name: "ECE", is_active: true }] });
     renderWithProviders(<AdministrativeReportBuilder initialReportKey="theory_faculty_allocations" />);
     await user.click(await screen.findByRole("combobox", { name: "Program" })); await user.click(screen.getByRole("option", { name: /BTECH-CSE/ }));
     await user.click(screen.getByRole("combobox", { name: "Department" })); await user.click(screen.getByRole("option", { name: "All" }));

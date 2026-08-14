@@ -1,12 +1,14 @@
 """Idempotently seed required application reference data."""
 
 from datetime import date
-from sqlalchemy import select
+import secrets
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 import app.db.models  # noqa: F401  # register every FK target before seeding/tests
 
 from app.core.security import hash_password
+from app.core.config import settings
 from app.db.session import SessionLocal
 from app.modules.authentication.models import Permission, Role, User
 from app.modules.departments.models import Department
@@ -25,11 +27,16 @@ ROLE_DEFINITIONS = {
     "Timetable Coordinator": "Timetable operations coordinator",
     "Faculty": "Faculty member",
     "Student": "Student",
+    "REPORT_VIEWER": "Read-only access to view and download reports.",
 }
 
+ADMIN_USERNAME = "administrator"
 ADMIN_EMAIL = "admin@vce.ac.in"
 ADMIN_PASSWORD = "Admin@123"
 ADMIN_FULL_NAME = "System Administrator"
+REPORT_VIEWER_USERNAME = "reportviewer"
+REPORT_VIEWER_EMAIL = "reportviewer@vce.ac.in"
+REPORT_VIEWER_FULL_NAME = "Report Viewer"
 
 PERMISSION_DEFINITIONS = {
     ("departments", "view"): "View departments",
@@ -80,6 +87,7 @@ PERMISSION_DEFINITIONS = {
     ("combined_teaching_groups", "read"): "View combined teaching groups",
     ("combined_teaching_groups", "manage"): "Manage combined teaching groups",
     ("reports", "read"): "Preview and export administrative reports",
+    ("account_password", "change_self"): "Change the current account password",
 }
 
 DEPARTMENT_DEFINITIONS = {
@@ -173,6 +181,7 @@ def seed() -> None:
         phase3={key:existing_permissions[key] for key in (("timetable_views","read"),("timetable_entries","move"),("timetable_entries","lock"),("timetable_versions","copy"),("timetable_workflow","review"),("timetable_workflow","approve"),("timetable_workflow","publish"),("timetable_workflow","archive"),("timetable_audit","read"))}
         combined_permissions = [existing_permissions[("combined_teaching_groups", action)] for action in ("read", "manage")]
         reports_read = existing_permissions[("reports", "read")]
+        change_own_password = existing_permissions[("account_password", "change_self")]
         hod_role = existing_roles["HOD"]
         if departments_view not in administrator_role.permissions:
             administrator_role.permissions.append(departments_view)
@@ -279,21 +288,51 @@ def seed() -> None:
             if reports_read not in role.permissions:
                 role.permissions.append(reports_read)
 
-        administrator = session.scalar(
-            select(User)
-            .where(User.email == ADMIN_EMAIL)
-            .options(selectinload(User.roles))
-        )
+        report_viewer_role = existing_roles["REPORT_VIEWER"]
+        report_viewer_role.permissions = [reports_read]
+        for role in (administrator_role, timetable_coordinator_role, existing_roles["Dean"], existing_roles["Principal"]):
+            if change_own_password not in role.permissions:
+                role.permissions.append(change_own_password)
+
+        administrator_by_username = session.scalar(select(User).where(func.lower(User.username) == ADMIN_USERNAME).options(selectinload(User.roles)))
+        administrator_by_email = session.scalar(select(User).where(func.lower(User.email) == ADMIN_EMAIL).options(selectinload(User.roles)))
+        if administrator_by_username is not None and administrator_by_email is not None and administrator_by_username.id != administrator_by_email.id:
+            raise RuntimeError("Cannot seed Administrator: username 'administrator' belongs to another user")
+        administrator = administrator_by_username or administrator_by_email
         if administrator is None:
             administrator = User(
+                username=ADMIN_USERNAME,
                 email=ADMIN_EMAIL,
                 full_name=ADMIN_FULL_NAME,
                 password_hash=hash_password(ADMIN_PASSWORD),
             )
             session.add(administrator)
+        else:
+            administrator.username = ADMIN_USERNAME
 
         if administrator_role not in administrator.roles:
             administrator.roles.append(administrator_role)
+
+        report_viewer = session.scalar(select(User).where(func.lower(User.username) == REPORT_VIEWER_USERNAME).options(selectinload(User.roles)))
+        if report_viewer is None:
+            configured_password = settings.report_viewer_initial_password
+            if configured_password is not None and len(configured_password) < 12:
+                raise RuntimeError("REPORT_VIEWER_INITIAL_PASSWORD must contain at least 12 characters")
+            password = configured_password or secrets.token_urlsafe(48)
+            report_viewer = User(
+                username=REPORT_VIEWER_USERNAME,
+                email=REPORT_VIEWER_EMAIL,
+                full_name=REPORT_VIEWER_FULL_NAME,
+                password_hash=hash_password(password),
+                is_active=True,
+                roles=[report_viewer_role],
+            )
+            session.add(report_viewer)
+            if configured_password is None:
+                print("Report Viewer created with an unavailable random credential; reset it as Administrator or rerun on a clean database with REPORT_VIEWER_INITIAL_PASSWORD set.")
+        else:
+            report_viewer.is_active = True
+            report_viewer.roles = [report_viewer_role]
 
         existing_departments = {
             department.department_code: department

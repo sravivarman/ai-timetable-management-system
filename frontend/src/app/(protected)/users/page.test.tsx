@@ -15,10 +15,11 @@ const roles = [
   { id: "principal-role", name: "Principal", permissions },
   { id: "dean-role", name: "Dean", permissions },
   { id: "coordinator-role", name: "Timetable Coordinator", permissions },
+  { id: "viewer-role", name: "REPORT_VIEWER", permissions },
   { id: "faculty-role", name: "Faculty", permissions },
   { id: "student-role", name: "Student", permissions },
 ];
-const administrator = { id: "user-1", email: "admin@vce.ac.in", full_name: "System Administrator", is_active: true, roles: [roles[0]] };
+const administrator = { id: "user-1", username: "administrator", email: "admin@vce.ac.in", full_name: "System Administrator", is_active: true, roles: [roles[0]] };
 
 describe("approved login account administration", () => {
   beforeEach(() => {
@@ -36,22 +37,24 @@ describe("approved login account administration", () => {
     await user.click(screen.getByRole("button", { name: "Create login account" }));
     const roleSelect = screen.getByLabelText("Approved login role");
     expect(within(roleSelect).getByRole("option", { name: "Dean Academics" })).toBeInTheDocument();
+    expect(within(roleSelect).getByRole("option", { name: "Report Viewer" })).toBeInTheDocument();
     expect(within(roleSelect).queryByRole("option", { name: "Faculty" })).not.toBeInTheDocument();
     expect(within(roleSelect).queryByRole("option", { name: "Student" })).not.toBeInTheDocument();
   });
 
   it("creates a login account with exactly one approved role", async () => {
-    vi.mocked(usersAdminApi.create).mockResolvedValue({ ...administrator, id: "user-2", email: "dean@vce.ac.in", full_name: "Dean Academics", roles: [roles[2]] });
+    vi.mocked(usersAdminApi.create).mockResolvedValue({ ...administrator, id: "user-2", username: "deanacademics", email: "dean@vce.ac.in", full_name: "Dean Academics", roles: [roles[2]] });
     const user = userEvent.setup();
     renderWithProviders(<UsersPage />);
     await screen.findByText("System Administrator");
     await user.click(screen.getByRole("button", { name: "Create login account" }));
+    await user.type(screen.getByLabelText("Username"), "deanacademics");
     await user.type(screen.getByLabelText("Full name"), "Dean Academics");
     await user.type(screen.getByLabelText("Email"), "dean@vce.ac.in");
     await user.selectOptions(screen.getByLabelText("Approved login role"), "dean-role");
     await user.type(screen.getByLabelText("Password"), "StrongPassword123");
     await user.click(screen.getByRole("button", { name: "Save account" }));
-    await waitFor(() => expect(usersAdminApi.create).toHaveBeenCalledWith({ email: "dean@vce.ac.in", full_name: "Dean Academics", password: "StrongPassword123", role_ids: ["dean-role"] }));
+    await waitFor(() => expect(usersAdminApi.create).toHaveBeenCalledWith({ username: "deanacademics", email: "dean@vce.ac.in", full_name: "Dean Academics", password: "StrongPassword123", role_ids: ["dean-role"] }));
   });
 
   it("supports search, status changes, editing, password reset, and deletion", async () => {

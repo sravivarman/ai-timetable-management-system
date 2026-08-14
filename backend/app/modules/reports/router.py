@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.modules.authentication.dependencies import require_permission
 from app.modules.reports.renderers import MIME_TYPES, render_report, report_filename
-from app.modules.reports.schemas import ReportDefinitionResponse, ReportPreviewResponse, ReportRequest
+from app.modules.reports.schemas import ReportDefinitionResponse, ReportFilterOptionsResponse, ReportPreviewResponse, ReportRequest
 from app.modules.reports.service import report_service
 
 
@@ -22,6 +22,12 @@ router = APIRouter(
 @router.get("/definitions", response_model=list[ReportDefinitionResponse])
 def list_report_definitions() -> list[ReportDefinitionResponse]:
     return report_service.definitions()
+
+
+@router.get("/filter-options", response_model=ReportFilterOptionsResponse)
+def report_filter_options(db: Session = Depends(get_db)) -> ReportFilterOptionsResponse:
+    """Return report-scoped read-only selector data without granting Master Data access."""
+    return report_service.filter_options(db)
 
 
 @router.post("/preview", response_model=ReportPreviewResponse)

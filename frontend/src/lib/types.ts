@@ -1,6 +1,6 @@
 export interface Permission { id: string; resource: string; action: string; description?: string | null }
 export interface Role { id: string; name: string; description?: string | null; permissions: Permission[] }
-export interface User { id: string; email: string; full_name: string; is_active: boolean; roles: Role[] }
+export interface User { id: string; username: string; email: string; full_name: string; is_active: boolean; roles: Role[] }
 export interface TokenPair { access_token: string; refresh_token: string; token_type: string }
 export interface Page<T> { items: T[]; total: number; page: number; page_size: number; pages: number }
 export interface Timetable { id: string; academic_term_id: string; scope_type: string; department_id?: string | null; program_id?: string | null; section_id?: string | null; name: string; status: string; active_version_id?: string | null; created_by: string; created_at: string; updated_at: string }
@@ -18,6 +18,7 @@ export interface AcademicTerm { id: string; academic_year: string; term_name: st
 export interface Department { id: string; department_code: string; department_name: string; short_name: string; is_active: boolean }
 export interface Program { id: string; department_id: string; program_code: string; program_name: string; is_active: boolean }
 export interface Section { id: string; program_id: string; academic_term_id: string; section_name: string; section_code: string; student_strength: number; is_active: boolean }
+export interface ReportFilterOptions { academic_terms: AcademicTerm[]; departments: Department[]; programs: Program[]; sections: Section[]; courses: Course[]; faculty: Faculty[] }
 export interface WorkingDay { id: string; day_name: string; sequence_number: number; is_working_day: boolean; is_active: boolean }
 export interface Classroom { id: string; room_number: string; room_name?: string | null; capacity?: number | null; is_active: boolean }
 export interface Laboratory { id: string; laboratory_code: string; laboratory_name: string; room_number: string; owning_department_id?: string; capacity?: number | null; concurrent_usage_mode?: "EXCLUSIVE" | "CAPACITY_SHARED"; is_shareable_across_departments?: boolean; is_available_all_periods?: boolean; availability_mode?: "ALL_PERIODS" | "EXCEPT_BLOCKED" | "ONLY_SELECTED"; is_active: boolean }

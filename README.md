@@ -64,7 +64,17 @@ cd backend
 python -m scripts.seed
 ```
 
-The script creates `admin@vce.ac.in` with the initial password `Admin@123` only when that account does not already exist. Change this password immediately after first use.
+The script preserves the existing Administrator account and password hash while ensuring its login username is `administrator`. For a new development database it creates the Administrator with the existing development bootstrap password.
+
+To establish the initial read-only Report Viewer credential, set `REPORT_VIEWER_INITIAL_PASSWORD` before the first seed run:
+
+```powershell
+cd backend
+$env:REPORT_VIEWER_INITIAL_PASSWORD = "use-a-secure-deployment-secret"
+python -m scripts.seed
+```
+
+The idempotent seed creates the `REPORT_VIEWER` role, grants only `reports.read`, and creates the active `reportviewer` account without resetting an existing password. If the variable is omitted, the account receives an unavailable random credential; an Administrator must reset it through User Management. Plaintext credentials are never logged.
 
 It also creates the eight VCE departments if missing: CIV, EEE, MEC, ECE, CSE, INF, CSM, and CSD.
 
@@ -118,13 +128,15 @@ Academic Term endpoints use the `/api/v1/academic-terms` prefix. Administrators 
 
 ## Authentication API
 
-All API paths use the `/api/v1` prefix. After creating the initial user, use `POST /api/v1/auth/login` to receive an access and refresh token. This endpoint uses the OAuth2 Password flow: submit the email in the `username` form field and the password in `password`. Send the access token as `Authorization: Bearer <token>` for protected endpoints; Swagger's **Authorize** dialog supports this flow directly.
+All API paths use the `/api/v1` prefix. After creating the initial user, use `POST /api/v1/auth/login` to receive an access and refresh token. This endpoint uses the OAuth2 Password flow: submit the account username in the `username` form field and the password in `password`. Email remains contact information and is not accepted as a login identifier. Send the access token as `Authorization: Bearer <token>` for protected endpoints; Swagger's **Authorize** dialog supports this flow directly.
 
-- `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`
+- `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`, `POST /auth/change-password`
 - `POST|GET|PUT|DELETE /roles`
 - `POST|GET|PUT|DELETE /users`
 
 Passwords are hashed with Argon2. Logout increments the user's token version, invalidating both the access and refresh tokens issued before logout.
+
+Usernames are trimmed, stored in lowercase, and unique case-insensitively. They accept letters, digits, `.`, `_`, and `-`. Report Viewer intentionally lacks `account_password.change_self`; its password can only be reset by an Administrator.
 
 ## Unified resource availability
 

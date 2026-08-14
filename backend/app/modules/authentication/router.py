@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.modules.authentication.dependencies import get_current_user, require_permission, require_user_management_or_bootstrap
 from app.modules.authentication.models import User
-from app.modules.authentication.schemas import RefreshRequest, RoleCreate, RoleRead, RoleUpdate, TokenPair, UserCreate, UserRead, UserUpdate
+from app.modules.authentication.schemas import ChangePasswordRequest, RefreshRequest, RoleCreate, RoleRead, RoleUpdate, TokenPair, UserCreate, UserRead, UserUpdate
 from app.modules.authentication.services import authentication_service
 
 router = APIRouter()
@@ -28,7 +28,7 @@ def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ) -> TokenPair:
-    """Authenticate using OAuth2's form fields; ``username`` is the user's email."""
+    """Authenticate using the account username and password."""
     user = authentication_service.authenticate(db, form_data.username, form_data.password)
     return TokenPair.model_validate(authentication_service.token_pair(user))
 
@@ -46,6 +46,12 @@ def logout(current_user: User = Depends(get_current_user), db: Session = Depends
 @auth_router.get("/me", response_model=UserRead, summary="Get the current user")
 def me(current_user: User = Depends(get_current_user)) -> User:
     return current_user
+
+
+@auth_router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission("account_password", "change_self"))])
+def change_password(payload: ChangePasswordRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> Response:
+    authentication_service.change_password(db, current_user, payload.current_password, payload.new_password)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @roles_router.post("", response_model=RoleRead, status_code=status.HTTP_201_CREATED, dependencies=[manage_roles])

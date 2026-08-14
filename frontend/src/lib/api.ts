@@ -1,16 +1,17 @@
 import { api } from "@/lib/api-client";
-import type { AcademicTerm, Classroom, ConflictReport, Course, Department, EntryAudit, Faculty, FreeResourceResponse, Laboratory, Page, Program, QualityMetrics, ReportDefinition, ReportPreview, ReportRequest, Role, Section, SolverInputSnapshot, SolverRun, StatusHistory, StudentBatch, Timetable, TimetableEntry, TimetableGrid, TimetableVersion, TokenPair, User, ValidationIssue, ValidationRun, VersionComparison, WorkingDay, WorkloadPreview } from "@/lib/types";
+import type { AcademicTerm, Classroom, ConflictReport, Course, Department, EntryAudit, Faculty, FreeResourceResponse, Laboratory, Page, Program, QualityMetrics, ReportDefinition, ReportFilterOptions, ReportPreview, ReportRequest, Role, Section, SolverInputSnapshot, SolverRun, StatusHistory, StudentBatch, Timetable, TimetableEntry, TimetableGrid, TimetableVersion, TokenPair, User, ValidationIssue, ValidationRun, VersionComparison, WorkingDay, WorkloadPreview } from "@/lib/types";
 
 export const authApi = {
-  async login(email: string, password: string) { const form = new URLSearchParams({ username: email, password }); return (await api.post<TokenPair>("/auth/login", form, { headers: { "Content-Type": "application/x-www-form-urlencoded" } })).data },
+  async login(username: string, password: string) { const form = new URLSearchParams({ username, password }); return (await api.post<TokenPair>("/auth/login", form, { headers: { "Content-Type": "application/x-www-form-urlencoded" } })).data },
   async me() { return (await api.get<User>("/auth/me")).data },
   async logout() { await api.post("/auth/logout") },
+  async changePassword(current_password: string, new_password: string) { await api.post("/auth/change-password", { current_password, new_password }) },
 };
 export const usersAdminApi = {
   async list() { return (await api.get<User[]>("/users")).data },
   async get(id: string) { return (await api.get<User>(`/users/${id}`)).data },
-  async create(payload: { email: string; full_name: string; password: string; role_ids: string[] }) { return (await api.post<User>("/users", payload)).data },
-  async update(id: string, payload: { email?: string; full_name?: string; password?: string; is_active?: boolean; role_ids?: string[] }) { return (await api.put<User>(`/users/${id}`, payload)).data },
+  async create(payload: { username: string; email: string; full_name: string; password: string; role_ids: string[] }) { return (await api.post<User>("/users", payload)).data },
+  async update(id: string, payload: { username?: string; email?: string; full_name?: string; password?: string; is_active?: boolean; role_ids?: string[] }) { return (await api.put<User>(`/users/${id}`, payload)).data },
   async remove(id: string) { await api.delete(`/users/${id}`) },
   async roles() { return (await api.get<Role[]>("/roles")).data },
 };
@@ -41,6 +42,7 @@ export const validationApi = {
 };
 export const reportsApi = {
   async definitions() { return (await api.get<ReportDefinition[]>("/reports/definitions")).data },
+  async filterOptions() { return (await api.get<ReportFilterOptions>("/reports/filter-options")).data },
   async preview(payload: ReportRequest) { return (await api.post<ReportPreview>("/reports/preview", payload)).data },
   async export(payload: ReportRequest, format: "xlsx" | "csv" | "docx" | "pdf") {
     const response = await api.post<Blob>("/reports/export", payload, { params: { format }, responseType: "blob" });

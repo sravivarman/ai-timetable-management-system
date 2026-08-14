@@ -7,6 +7,7 @@ import { renderWithProviders } from "@/test/render";
 
 let currentParams = ""; const replace = vi.fn();
 vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(currentParams), useRouter: () => ({ replace }) }));
+vi.mock("@/providers/auth-provider", () => ({ useAuth: () => ({ hasRole: () => false }) }));
 vi.mock("@/lib/api", () => ({
   listAcademicTerms: vi.fn(),
   timetableApi: { list: vi.fn(), versions: vi.fn(), viewGrid: vi.fn(), conflicts: vi.fn() },

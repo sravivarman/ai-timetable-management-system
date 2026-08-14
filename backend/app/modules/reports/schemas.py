@@ -3,6 +3,12 @@
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from app.modules.academic_terms.schemas import AcademicTermRead
+from app.modules.courses.schemas import CourseRead
+from app.modules.departments.schemas import DepartmentRead
+from app.modules.faculty.schemas import FacultyRead
+from app.modules.programs.schemas import ProgramRead
+from app.modules.sections.schemas import SectionRead
 
 
 OPTIONAL_ENTITY_FILTER_KEYS = frozenset({
@@ -84,6 +90,15 @@ class ReportRequest(BaseModel):
         if len(value) != len(set(value)):
             raise ValueError("Duplicate report columns are not allowed")
         return value
+
+
+class ReportFilterOptionsResponse(BaseModel):
+    academic_terms: list[AcademicTermRead]
+    departments: list[DepartmentRead]
+    programs: list[ProgramRead]
+    sections: list[SectionRead]
+    courses: list[CourseRead]
+    faculty: list[FacultyRead]
 
 
 class ReportPreviewResponse(BaseModel):

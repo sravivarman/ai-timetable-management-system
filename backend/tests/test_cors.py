@@ -37,7 +37,7 @@ class CorsTests(unittest.TestCase):
 
         login = self.client.post(
             "/api/v1/auth/login",
-            data={"username": "admin.test@vce.ac.in", "password": "TestPassword123"},
+            data={"username": "test-administrator", "password": "TestPassword123"},
             headers={"Origin": origin},
         )
         self.assertEqual(login.status_code, 200, login.text)

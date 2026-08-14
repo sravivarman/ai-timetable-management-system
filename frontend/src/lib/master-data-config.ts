@@ -19,7 +19,7 @@ const classroom = lookup("/classrooms", "display_label");
 const laboratory = lookup("/laboratories", "laboratory_code", "laboratory_name");
 const workingDay = lookup("/working-days", "day_name");
 const offering = lookup("/course-offerings", "display_label");
-const user = lookup("/users", "full_name", "email");
+const user = lookup("/users", "username", "full_name");
 
 const active: MasterColumn = { key: "is_active", label: "Status" };
 const id: MasterColumn = { key: "id", label: "ID" };

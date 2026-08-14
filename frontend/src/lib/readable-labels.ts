@@ -10,7 +10,7 @@ export function isUuid(value: unknown): boolean {
 
 export function readableRecordLabel(endpoint: string, row: MasterRecord): string {
   const values: Record<string, string[]> = {
-    "/users": [text(row.full_name), text(row.email)],
+    "/users": [text(row.username), text(row.full_name)],
     "/departments": [text(row.department_name), text(row.department_code)],
     "/programs": [text(row.program_name), text(row.program_code)],
     "/academic-terms": [text(row.academic_year), text(row.term_name)],

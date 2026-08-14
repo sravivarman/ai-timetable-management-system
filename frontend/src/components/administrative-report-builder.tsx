@@ -7,20 +7,22 @@ import { ArrowDown, ArrowUp, Download, Eye, Plus, RotateCcw, X } from "lucide-re
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SearchableSelect, type SelectOption } from "@/components/searchable-select";
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader } from "@/components/ui";
-import { listAcademicTerms, masterApi, reportsApi } from "@/lib/api";
+import { reportsApi } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { sectionLabel, sectionTerm } from "@/lib/section-labels";
-import type { ReportDefinition, ReportRequest, ReportSort } from "@/lib/types";
+import type { AcademicTerm, Course, Department, Faculty, Program, ReportDefinition, ReportRequest, ReportSort, Section } from "@/lib/types";
 import { useToast } from "@/providers/toast-provider";
+import { useAuth } from "@/providers/auth-provider";
 import { normalizeEntityLookupParams, normalizeOptionalEntityFilter, normalizeReportFilters } from "@/lib/report-filter-normalization";
-import type { Program, Section } from "@/lib/types";
 
 const PREFIX = "administrative-";
 
 export function AdministrativeReportBuilder({ initialReportKey }: { initialReportKey: string }) {
   const router = useRouter();
   const { notify } = useToast();
+  const { hasRole } = useAuth();
+  const isReportViewer = hasRole("REPORT_VIEWER");
   const definitions = useQuery({ queryKey: queryKeys.reportDefinitions, queryFn: reportsApi.definitions, retry: false });
   const [reportKey, setReportKey] = useState(initialReportKey);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -41,22 +43,23 @@ export function AdministrativeReportBuilder({ initialReportKey }: { initialRepor
     setPage(1);
   }, [definition]);
 
-  const terms = useQuery({ queryKey: queryKeys.academicTerms, queryFn: listAcademicTerms, retry: false });
-  const departments = useQuery({ queryKey: queryKeys.departments("administrative-reports"), queryFn: masterApi.departments, retry: false });
+  const filterOptions = useQuery({ queryKey: queryKeys.report("administrative-filter-options", {}), queryFn: reportsApi.filterOptions, retry: false });
   const lookupFilters = normalizeEntityLookupParams({ academic_term_id: filters.academic_term_id, department_id: filters.department_id, program_id: filters.program_id });
   const programDepartmentId = normalizeOptionalEntityFilter(filters.department_id);
-  const programs = useQuery({ queryKey: queryKeys.programs(`administrative-reports:${programDepartmentId ?? "all"}`), queryFn: () => masterApi.programs(programDepartmentId), retry: false });
-  const sections = useQuery({ queryKey: queryKeys.sections("administrative-reports", JSON.stringify(lookupFilters)), queryFn: () => masterApi.sections(lookupFilters), retry: false });
-  const courses = useQuery({ queryKey: queryKeys.report("administrative-course-options", {}), queryFn: () => masterApi.courses(), retry: false });
   const facultyDepartmentId = normalizeOptionalEntityFilter(filters.faculty_department_id || filters.department_id);
-  const faculty = useQuery({ queryKey: queryKeys.report("administrative-faculty-options", { department: facultyDepartmentId }), queryFn: () => masterApi.faculty(undefined, facultyDepartmentId), retry: false });
+  const allPrograms = filterOptions.data?.programs ?? [];
+  const allSections = filterOptions.data?.sections ?? [];
+  const programs = programDepartmentId ? allPrograms.filter((item) => item.department_id === programDepartmentId) : allPrograms;
+  const programIds = new Set(allPrograms.filter((item) => !programDepartmentId || item.department_id === programDepartmentId).map((item) => item.id));
+  const sections = allSections.filter((item) => (!lookupFilters.academic_term_id || item.academic_term_id === lookupFilters.academic_term_id) && (!lookupFilters.program_id || item.program_id === lookupFilters.program_id) && (!programDepartmentId || programIds.has(item.program_id)));
+  const faculty = facultyDepartmentId ? (filterOptions.data?.faculty ?? []).filter((item) => item.department_id === facultyDepartmentId) : filterOptions.data?.faculty ?? [];
 
   useEffect(() => {
-    if (!definition?.filters.some((item) => item.key === "academic_term_id") || filters.academic_term_id || !terms.data || termDefaulted.current.has(definition.key)) return;
-    const preferred = terms.data.items.find((item) => item.is_current) ?? terms.data.items.find((item) => item.is_active);
+    if (!definition?.filters.some((item) => item.key === "academic_term_id") || filters.academic_term_id || !filterOptions.data || termDefaulted.current.has(definition.key)) return;
+    const preferred = filterOptions.data.academic_terms.find((item) => item.is_current) ?? filterOptions.data.academic_terms.find((item) => item.is_active);
     termDefaulted.current.add(definition.key);
     if (preferred) setFilters((current) => ({ ...current, academic_term_id: preferred.id }));
-  }, [definition, filters.academic_term_id, terms.data]);
+  }, [definition, filters.academic_term_id, filterOptions.data]);
 
   const request = useMemo<ReportRequest | null>(() => definition && columns.length ? ({ report_key: definition.key, filters: normalizeReportFilters(filters), selected_columns: columns, sort_fields: sortFields, page, page_size: 50 }) : null, [definition, filters, columns, sortFields, page]);
   const configurationSignature = request ? JSON.stringify({ ...request, page: undefined, page_size: undefined }) : "";
@@ -88,11 +91,11 @@ export function AdministrativeReportBuilder({ initialReportKey }: { initialRepor
   const reportOptions = (definitions.data ?? []).map((item) => ({ value: item.key, label: item.title, description: item.description }));
   const stale = Boolean(preview.data && previewedSignature !== configurationSignature);
   return <>
-    <PageHeader title="Administrative Reports" description="Configure one canonical dataset, preview it, then export the same records to Excel, CSV, Word, or PDF." actions={<Link href="/reports?report=section-timetable" className="button-secondary">Operational reports</Link>} />
+    <PageHeader title="Administrative Reports" description="Configure one canonical dataset, preview it, then export the same records to Excel, CSV, Word, or PDF." actions={!isReportViewer ? <Link href="/reports?report=section-timetable" className="button-secondary">Operational reports</Link> : undefined} />
     <Card className="mb-5"><SearchableSelect label="Report" value={reportKey} options={reportOptions} onChange={(value) => { setReportKey(value); router.replace(`/reports?report=${PREFIX}${value}`, { scroll: false }); }} /></Card>
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
       <div className="space-y-5">
-        <ReportFilters definition={definition} filters={filters} setFilters={(next, changed) => { setFilters(reconcileDependentFilters(next, changed, programs.data?.items ?? [], sections.data?.items ?? [])); setPage(1); }} options={{ terms: termOptions(terms.data?.items ?? []), departments: departmentOptions(departments.data?.items ?? []), programs: programOptions(programs.data?.items ?? []), sections: sectionOptions(sections.data?.items ?? [], terms.data?.items ?? []), courses: courseOptions(courses.data?.items ?? []), faculty: facultyOptions(faculty.data?.items ?? []) }} loading={{ academic_term_id: terms.isLoading, department_id: departments.isLoading, faculty_department_id: departments.isLoading, program_id: programs.isLoading, section_id: sections.isLoading, course_id: courses.isLoading, faculty_id: faculty.isLoading }} errors={{ academic_term_id: terms.error, department_id: departments.error, faculty_department_id: departments.error, program_id: programs.error, section_id: sections.error, course_id: courses.error, faculty_id: faculty.error }} />
+        <ReportFilters definition={definition} filters={filters} setFilters={(next, changed) => { setFilters(reconcileDependentFilters(next, changed, allPrograms, allSections)); setPage(1); }} options={{ terms: termOptions(filterOptions.data?.academic_terms ?? []), departments: departmentOptions(filterOptions.data?.departments ?? []), programs: programOptions(programs), sections: sectionOptions(sections, filterOptions.data?.academic_terms ?? []), courses: courseOptions(filterOptions.data?.courses ?? []), faculty: facultyOptions(faculty) }} loading={{ academic_term_id: filterOptions.isLoading, department_id: filterOptions.isLoading, faculty_department_id: filterOptions.isLoading, program_id: filterOptions.isLoading, section_id: filterOptions.isLoading, course_id: filterOptions.isLoading, faculty_id: filterOptions.isLoading }} errors={{ academic_term_id: filterOptions.error, department_id: filterOptions.error, faculty_department_id: filterOptions.error, program_id: filterOptions.error, section_id: filterOptions.error, course_id: filterOptions.error, faculty_id: filterOptions.error }} />
         <ColumnPicker definition={definition} selected={columns} onChange={(value) => { setColumns(value); setPage(1); }} />
         <SortEditor definition={definition} value={sortFields} onChange={setSortFields} />
       </div>
@@ -149,9 +152,9 @@ export function reconcileDependentFilters(filters: Record<string, string>, chang
   return next;
 }
 function formatName(format: string) { return format === "xlsx" ? "Excel" : format === "docx" ? "Word" : format.toUpperCase(); }
-function termOptions(items: Awaited<ReturnType<typeof listAcademicTerms>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.academic_year} • ${item.term_name}`, description: item.is_current ? "Current" : item.is_active ? "Active" : "Historical" })); }
-function departmentOptions(items: Awaited<ReturnType<typeof masterApi.departments>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.department_code} • ${item.department_name}` })); }
-function programOptions(items: Awaited<ReturnType<typeof masterApi.programs>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.program_code} • ${item.program_name}` })); }
-function sectionOptions(items: Awaited<ReturnType<typeof masterApi.sections>>["items"], terms: Awaited<ReturnType<typeof listAcademicTerms>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: sectionLabel(item, sectionTerm(item, terms)) })); }
-function courseOptions(items: Awaited<ReturnType<typeof masterApi.courses>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.course_code} • ${item.course_name}`, description: item.course_type })); }
-function facultyOptions(items: Awaited<ReturnType<typeof masterApi.faculty>>["items"]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.faculty_code} • ${item.full_name}`, description: item.designation })); }
+function termOptions(items: AcademicTerm[]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.academic_year} • ${item.term_name}`, description: item.is_current ? "Current" : item.is_active ? "Active" : "Historical" })); }
+function departmentOptions(items: Department[]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.department_code} • ${item.department_name}` })); }
+function programOptions(items: Program[]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.program_code} • ${item.program_name}` })); }
+function sectionOptions(items: Section[], terms: AcademicTerm[]): SelectOption[] { return items.map((item) => ({ value: item.id, label: sectionLabel(item, sectionTerm(item, terms)) })); }
+function courseOptions(items: Course[]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.course_code} • ${item.course_name}`, description: item.course_type })); }
+function facultyOptions(items: Faculty[]): SelectOption[] { return items.map((item) => ({ value: item.id, label: `${item.faculty_code} • ${item.full_name}`, description: item.designation })); }

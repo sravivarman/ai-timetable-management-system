@@ -18,6 +18,7 @@ import type { ConflictReport, Faculty, FreeResourceResponse, Program, Section, S
 import { solverRunLabel, stripIdentifierFields, timetableVersionLabel, validationRunLabel } from "@/lib/readable-labels";
 import { sectionLabel, sectionTerm } from "@/lib/section-labels";
 import { AdministrativeReportBuilder } from "@/components/administrative-report-builder";
+import { useAuth } from "@/providers/auth-provider";
 
 const definitions = [
   ["administrative-faculty_master", "Faculty Master"], ["administrative-course_offerings", "Course Offerings"],
@@ -36,6 +37,9 @@ export default function ReportsPage() { return <Suspense fallback={<LoadingState
 
 function Reports() {
   const params = useSearchParams();
+  const { hasRole } = useAuth();
+  const selectedForViewer = params.get("report") ?? "";
+  if (hasRole("REPORT_VIEWER")) return <AdministrativeReportBuilder initialReportKey={selectedForViewer.startsWith("administrative-") ? selectedForViewer.slice("administrative-".length) : "faculty_master"} />;
   const selected = params.get("report") ?? "section-timetable";
   if (selected.startsWith("administrative-")) return <AdministrativeReportBuilder initialReportKey={selected.slice("administrative-".length)} />;
   return <OperationalReports />;

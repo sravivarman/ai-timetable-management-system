@@ -15,8 +15,11 @@ class UserRepository:
     def get_by_email(self, db: Session, email: str) -> User | None:
         return db.scalar(select(User).where(User.email == email.lower()).options(selectinload(User.roles)))
 
+    def get_by_username(self, db: Session, username: str) -> User | None:
+        return db.scalar(select(User).where(func.lower(User.username) == username.strip().lower()).options(selectinload(User.roles)))
+
     def list(self, db: Session) -> list[User]:
-        return list(db.scalars(select(User).order_by(User.email).options(selectinload(User.roles))))
+        return list(db.scalars(select(User).order_by(func.lower(User.username), User.id).options(selectinload(User.roles))))
 
     def count(self, db: Session) -> int:
         return int(db.scalar(select(func.count()).select_from(User)) or 0)

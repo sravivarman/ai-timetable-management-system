@@ -32,6 +32,7 @@ from app.modules.reports.schemas import (
     ReportDefinitionResponse,
     ReportPreviewResponse,
     ReportRequest,
+    ReportFilterOptionsResponse,
     SortField,
     OPTIONAL_ENTITY_FILTER_KEYS,
 )
@@ -62,6 +63,16 @@ class CanonicalReport:
 
 
 class ReportService:
+    def filter_options(self, db: Session) -> ReportFilterOptionsResponse:
+        return ReportFilterOptionsResponse(
+            academic_terms=list(db.scalars(select(AcademicTerm).order_by(AcademicTerm.academic_year.desc(), AcademicTerm.year_number, AcademicTerm.semester_number, AcademicTerm.id))),
+            departments=list(db.scalars(select(Department).order_by(Department.department_code, Department.id))),
+            programs=list(db.scalars(select(Program).order_by(Program.program_code, Program.id))),
+            sections=list(db.scalars(select(Section).order_by(Section.section_code, Section.id))),
+            courses=list(db.scalars(select(Course).order_by(Course.course_code, Course.id))),
+            faculty=list(db.scalars(select(Faculty).order_by(Faculty.faculty_code, Faculty.id))),
+        )
+
     """Build validated canonical results without mutating domain data."""
 
     def definitions(self) -> list[ReportDefinitionResponse]:

@@ -84,10 +84,10 @@ def create_facilities_test_context() -> FacilitiesTestContext:
         session.flush()
 
         users = {
-            "administrator": User(email="admin.test@vce.ac.in", full_name="Test Administrator", password_hash=hash_password("TestPassword123"), roles=[administrator]),
-            "coordinator": User(email="coordinator.test@vce.ac.in", full_name="Test Coordinator", password_hash=hash_password("TestPassword123"), roles=[coordinator]),
-            "hod": User(email="hod.test@vce.ac.in", full_name="Test HOD", password_hash=hash_password("TestPassword123"), roles=[hod]),
-            "unauthorized": User(email="faculty.test@vce.ac.in", full_name="Test Faculty", password_hash=hash_password("TestPassword123"), roles=[unprivileged]),
+            "administrator": User(username="test-administrator", email="admin.test@vce.ac.in", full_name="Test Administrator", password_hash=hash_password("TestPassword123"), roles=[administrator]),
+            "coordinator": User(username="test-coordinator", email="coordinator.test@vce.ac.in", full_name="Test Coordinator", password_hash=hash_password("TestPassword123"), roles=[coordinator]),
+            "hod": User(username="test-hod", email="hod.test@vce.ac.in", full_name="Test HOD", password_hash=hash_password("TestPassword123"), roles=[hod]),
+            "unauthorized": User(username="test-faculty", email="faculty.test@vce.ac.in", full_name="Test Faculty", password_hash=hash_password("TestPassword123"), roles=[unprivileged]),
         }
         session.add_all(users.values())
         session.commit()
