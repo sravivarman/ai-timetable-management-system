@@ -23,12 +23,13 @@ from app.modules.faculty_scheduling.models import FacultyAvailability, FacultySc
 from app.modules.laboratory_batches.models import LaboratoryBatchConfiguration, LaboratoryRotationAssignment, LaboratoryRotationBlock, LaboratoryRotationGroup, StudentBatch
 from app.modules.programs.models import Program
 from app.modules.schedule_configuration.models import PeriodTiming, WorkingDay
-from app.modules.resource_availability.models import ResourceAvailabilityProfile, ResourceAvailabilitySlot
+from app.modules.resource_availability.models import ResourceAvailabilityProfile, ResourceAvailabilitySlot, ResourceDateException
 from app.modules.resource_availability.service import availability_service
 from app.modules.sections.models import Section
 from app.modules.timetable_validation.models import ValidationRun
 from app.modules.timetables.models import SolverInputSnapshot, Timetable, TimetableEntry, TimetableVersion
 from app.modules.timetables.capacity import entry_capacity_demand
+from app.modules.scheduling_slots.models import SchedulingSlot, SchedulingSlotWorkingDate, SlotCourseRequirement
 
 
 def canonical_value(value):
@@ -67,6 +68,8 @@ class SolverInputBuilder:
         if run.academic_term_id != timetable.academic_term_id: raise HTTPException(422, "Validation run academic term does not match timetable")
         for field in ("scope_type", "department_id", "program_id", "section_id"):
             if getattr(run, field) != getattr(timetable, field): raise HTTPException(422, "Validation run scope does not match timetable")
+        for field in ("scheduling_mode", "scheduling_slot_id"):
+            if getattr(version, field) != getattr(timetable, field) or getattr(run, field) != getattr(timetable, field): raise HTTPException(422, "Validation run, timetable, and version scheduling mode/Slot do not match")
         return version, timetable, run
 
     def _scope(self, db, timetable):
@@ -113,6 +116,16 @@ class SolverInputBuilder:
         section_by_id = {x.id: x for x in sections}
         offerings.sort(key=lambda x: (section_by_id[x.section_id].section_code, course_by_id[x.course_id].course_code, str(x.id)))
         offering_ids = {x.id for x in offerings}
+        scheduling_slot = None; slot_working_dates = []; slot_requirements = {}
+        if version.scheduling_mode == "SLOT_BASED":
+            scheduling_slot = db.get(SchedulingSlot, version.scheduling_slot_id)
+            if scheduling_slot is None or not scheduling_slot.is_active: raise HTTPException(409, "Scheduling Slot is inactive")
+            if scheduling_slot.academic_term_id != timetable.academic_term_id: raise HTTPException(422, "Scheduling Slot Academic Term does not match timetable")
+            slot_working_dates = list(db.scalars(select(SchedulingSlotWorkingDate).where(SchedulingSlotWorkingDate.scheduling_slot_id == scheduling_slot.id, SchedulingSlotWorkingDate.is_active.is_(True)).order_by(SchedulingSlotWorkingDate.working_date, SchedulingSlotWorkingDate.id)))
+            if not slot_working_dates: raise HTTPException(422, f"Scheduling Slot {scheduling_slot.slot_code} has no active working dates.")
+            slot_requirements = {row.course_offering_id: row for row in db.scalars(select(SlotCourseRequirement).where(SlotCourseRequirement.scheduling_slot_id == scheduling_slot.id, SlotCourseRequirement.course_offering_id.in_(offering_ids), SlotCourseRequirement.is_active.is_(True)))} if offering_ids else {}
+            missing = [offering for offering in offerings if offering.id not in slot_requirements]
+            if missing: raise HTTPException(422, f"Scheduling Slot {scheduling_slot.slot_code} has {len(missing)} missing Course Offering requirement(s)")
         combined_members = list(db.scalars(select(CombinedTeachingGroupMember).join(CombinedTeachingGroup).where(CombinedTeachingGroupMember.course_offering_id.in_(offering_ids), CombinedTeachingGroupMember.is_active.is_(True), CombinedTeachingGroup.is_active.is_(True), CombinedTeachingGroup.academic_term_id == timetable.academic_term_id).order_by(CombinedTeachingGroupMember.combined_teaching_group_id, CombinedTeachingGroupMember.course_offering_id, CombinedTeachingGroupMember.id))) if offering_ids else []
         candidate_group_ids = {x.combined_teaching_group_id for x in combined_members}
         all_members = list(db.scalars(select(CombinedTeachingGroupMember).where(CombinedTeachingGroupMember.combined_teaching_group_id.in_(candidate_group_ids), CombinedTeachingGroupMember.is_active.is_(True)).order_by(CombinedTeachingGroupMember.combined_teaching_group_id, CombinedTeachingGroupMember.course_offering_id, CombinedTeachingGroupMember.id))) if candidate_group_ids else []
@@ -163,8 +176,16 @@ class SolverInputBuilder:
         lab_ids = {x.id for x in laboratories}
         working_days = list(db.scalars(select(WorkingDay).where(WorkingDay.is_active.is_(True), WorkingDay.is_working_day.is_(True)).order_by(WorkingDay.sequence_number, WorkingDay.id)))
         day_by_name = {x.day_name: x for x in working_days}
+        if version.scheduling_mode == "SLOT_BASED":
+            scheduling_days=[]
+            for sequence,row in enumerate(slot_working_dates,1):
+                day_name=row.working_date.strftime("%A");working_day=day_by_name.get(day_name)
+                if working_day is None:raise HTTPException(422,f"{row.working_date.isoformat()} ({day_name}) is not an active institutional working day")
+                scheduling_days.append({"id":row.working_date.isoformat(),"working_day_id":working_day.id,"day_name":day_name,"sequence_number":sequence,"actual_date":row.working_date})
+        else:
+            scheduling_days=[{"id":row.id,"working_day_id":row.id,"day_name":row.day_name,"sequence_number":row.sequence_number,"actual_date":None} for row in working_days]
         resource_ids = {"FACULTY": faculty_ids, "CLASSROOM": {x.id for x in classrooms}, "LABORATORY": lab_ids}
-        profiles=[]; generic_slots=[]
+        profiles=[]; generic_slots=[]; date_exceptions=[]
         for resource_type, ids in resource_ids.items():
             if not ids: continue
             stored=list(db.scalars(select(ResourceAvailabilityProfile).where(ResourceAvailabilityProfile.resource_type==resource_type,ResourceAvailabilityProfile.resource_id.in_(ids),ResourceAvailabilityProfile.academic_term_id==timetable.academic_term_id,ResourceAvailabilityProfile.is_active.is_(True)).order_by(ResourceAvailabilityProfile.resource_id,ResourceAvailabilityProfile.id)))
@@ -174,6 +195,8 @@ class SolverInputBuilder:
                     profiles.append({"id":None,"resource_type":resource_type,"resource_id":resource_id,"academic_term_id":timetable.academic_term_id,"availability_mode":availability_service.effective_mode(db,resource_type,resource_id,timetable.academic_term_id)})
             rows=list(db.scalars(select(ResourceAvailabilitySlot).where(ResourceAvailabilitySlot.resource_type==resource_type,ResourceAvailabilitySlot.resource_id.in_(ids),ResourceAvailabilitySlot.academic_term_id==timetable.academic_term_id,ResourceAvailabilitySlot.is_active.is_(True)).order_by(ResourceAvailabilitySlot.resource_id,ResourceAvailabilitySlot.working_day_id,ResourceAvailabilitySlot.period_number,ResourceAvailabilitySlot.id)))
             generic_slots.extend(row_dict(x,"id","resource_type","resource_id","academic_term_id","working_day_id","period_number","availability_type","reason") for x in rows)
+            exceptions=list(db.scalars(select(ResourceDateException).where(ResourceDateException.resource_type==resource_type,ResourceDateException.resource_id.in_(ids),ResourceDateException.academic_term_id==timetable.academic_term_id,ResourceDateException.is_active.is_(True)).order_by(ResourceDateException.exception_date,ResourceDateException.period_start,ResourceDateException.resource_id,ResourceDateException.id)))
+            date_exceptions.extend(row_dict(x,"id","resource_type","resource_id","academic_term_id","exception_date","period_start","period_end","availability_status","reason") for x in exceptions)
         # Legacy faculty records remain the source of soft preferences. Directly
         # inserted hard-unavailable rows are represented in generic snapshots too.
         existing_generic={(x["resource_id"],x["working_day_id"],x["period_number"]) for x in generic_slots if x["resource_type"]=="FACULTY"}
@@ -203,6 +226,7 @@ class SolverInputBuilder:
                 "lab_sessions_per_week": course.lab_sessions_per_week,
                 "session_duration": course.lab_session_duration if course.course_type == "LABORATORY" and course.lab_session_duration else course.session_duration,
                 "sessions_per_week": course.lab_sessions_per_week if course.course_type == "LABORATORY" and course.lab_sessions_per_week else course.sessions_per_week,
+                "slot_sessions_required": slot_requirements[offering.id].sessions_required if offering.id in slot_requirements else None,
                 "default_group_count": course.default_lab_group_count if course.course_type == "LABORATORY" and course.default_lab_group_count else course.default_group_count,
                 "allows_same_course_double_period": course.allows_same_course_double_period,
                 "default_laboratory_id": course.default_laboratory_id,
@@ -234,7 +258,10 @@ class SolverInputBuilder:
             return item
 
         snapshot = {
-            "metadata": {"timetable_id": timetable.id, "timetable_version_id": version.id, "academic_term_id": timetable.academic_term_id, "scope_type": timetable.scope_type, "department_id": timetable.department_id, "program_id": timetable.program_id, "section_id": timetable.section_id, "validation_run_id": run.id, "version_number": version.version_number,"year_number":academic_term.year_number if academic_term else None,"schedule_type":"FIRST_YEAR" if academic_term and academic_term.year_number==1 else "HIGHER_YEAR"},
+            "metadata": {"timetable_id": timetable.id, "timetable_version_id": version.id, "academic_term_id": timetable.academic_term_id, "scope_type": timetable.scope_type, "department_id": timetable.department_id, "program_id": timetable.program_id, "section_id": timetable.section_id, "validation_run_id": run.id, "version_number": version.version_number,"scheduling_mode":version.scheduling_mode,"scheduling_slot_id":version.scheduling_slot_id,"year_number":academic_term.year_number if academic_term else None,"schedule_type":"FIRST_YEAR" if academic_term and academic_term.year_number==1 else "HIGHER_YEAR"},
+            "scheduling_slot": row_dict(scheduling_slot,"id","academic_term_id","slot_code","slot_name","sequence_number","start_date","end_date") if scheduling_slot else None,
+            "slot_working_dates": [row_dict(x,"id","scheduling_slot_id","working_date") for x in slot_working_dates],
+            "slot_course_requirements": [row_dict(slot_requirements[key],"id","scheduling_slot_id","course_offering_id","sessions_required") for key in sorted(slot_requirements,key=str)],
             "departments": [row_dict(x,"id","department_code","department_name","short_name") for x in departments],
             "programs": [row_dict(x,"id","department_id","program_code","program_name","degree_type","duration_years") for x in programs],
             "sections": [row_dict(x,"id","program_id","academic_term_id","section_name","section_code","student_strength") for x in sections],
@@ -265,15 +292,18 @@ class SolverInputBuilder:
                 "weekly_periods":next(offering.weekly_periods_override or course_by_id[offering.course_id].weekly_periods for offering in offerings if offering.id==members_by_group[group.id][0].course_offering_id),
                 "session_duration":course_by_id[group.course_id].session_duration,
                 "sessions_per_week":course_by_id[group.course_id].sessions_per_week,
+                "slot_sessions_required":next((slot_requirements[member.course_offering_id].sessions_required for member in members_by_group[group.id] if member.course_offering_id in slot_requirements),None),
             } for group in combined_groups],
             "primary_classroom_assignments":[row_dict(x,"id","section_id","classroom_id","academic_term_id","effective_from","effective_to") for x in room_assignments],
             "laboratories":[row_dict(x,"id","laboratory_code","laboratory_name","room_number","owning_department_id","capacity","concurrent_usage_mode","is_shareable_across_departments","is_available_all_periods","availability_mode") for x in laboratories],
             "resource_availability_profiles":profiles,
             "resource_availability_slots":generic_slots,
+            "resource_date_exceptions":date_exceptions,
             "laboratory_availability_blocks":[{**x,"laboratory_id":x["resource_id"]} for x in lab_availability_blocks],
             "working_days":[row_dict(x,"id","day_name","sequence_number") for x in working_days],
+            "scheduling_days":scheduling_days,
             "period_timings":[row_dict(x,"id","schedule_type","period_number","start_time","end_time","duration_minutes","is_instructional","break_type","sequence_number") for x in timings],
-            "locked_entries":[{**row_dict(x,"id","timetable_version_id","course_offering_id","section_id","faculty_id","laboratory_faculty_allocation_id","classroom_id","laboratory_id","student_batch_id","laboratory_rotation_block_id","laboratory_rotation_assignment_id","combined_teaching_event_id","working_day_id","period_number","session_length","entry_type","is_manual","is_locked"),"capacity_demand":entry_capacity_demand(db,x)} for x in locked_entries],
+            "locked_entries":[{**row_dict(x,"id","timetable_version_id","course_offering_id","section_id","faculty_id","laboratory_faculty_allocation_id","classroom_id","laboratory_id","student_batch_id","laboratory_rotation_block_id","laboratory_rotation_assignment_id","combined_teaching_event_id","working_day_id","actual_date","period_number","session_length","entry_type","is_manual","is_locked"),"scheduling_day_id":x.actual_date.isoformat() if x.actual_date else str(x.working_day_id),"capacity_demand":entry_capacity_demand(db,x)} for x in locked_entries],
         }
         snapshot = canonical_value(snapshot); _, digest = canonical_hash(snapshot)
         if not persist:return digest

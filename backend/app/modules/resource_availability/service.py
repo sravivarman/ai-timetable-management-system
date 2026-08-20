@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.facilities.models import Laboratory
-from app.modules.resource_availability.models import ResourceAvailabilityProfile, ResourceAvailabilitySlot
+from app.modules.resource_availability.models import ResourceAvailabilityProfile, ResourceAvailabilitySlot, ResourceDateException
 from app.modules.resource_availability.registry import RESOURCE_REGISTRY, registration
 from app.modules.schedule_configuration.models import WorkingDay
 
@@ -99,7 +99,10 @@ class AvailabilityService:
         if (mode=="EXCEPT_BLOCKED" and slot.availability_type!="BLOCKED") or (mode=="ONLY_SELECTED" and slot.availability_type!="ALLOWED") or mode=="ALL_PERIODS":raise HTTPException(422,"RESOURCE_AVAILABILITY_CONFLICT: slot does not match availability mode")
         slot.is_active=True;slot.updated_at=datetime.now(timezone.utc);db.commit();db.refresh(slot);return slot
 
-    def is_available(self,db,resource_type,resource_id,academic_term_id,working_day_id,period_number):
+    def is_available(self,db,resource_type,resource_id,academic_term_id,working_day_id,period_number,actual_date=None):
+        if actual_date is not None:
+            exception = db.scalar(select(ResourceDateException).where(ResourceDateException.resource_type == self.normalize_type(resource_type), ResourceDateException.resource_id == resource_id, ResourceDateException.academic_term_id == academic_term_id, ResourceDateException.exception_date == actual_date, ResourceDateException.is_active.is_(True), ((ResourceDateException.period_start.is_(None)) | ((ResourceDateException.period_start <= period_number) & (ResourceDateException.period_end >= period_number)))).order_by(ResourceDateException.period_start.desc().nullslast(), ResourceDateException.updated_at.desc(), ResourceDateException.id.desc()))
+            if exception is not None: return exception.availability_status == "AVAILABLE"
         mode=self.effective_mode(db,resource_type,resource_id,academic_term_id)
         kind=self.normalize_type(resource_type);types=set(db.scalars(select(ResourceAvailabilitySlot.availability_type).where(ResourceAvailabilitySlot.resource_type==kind,ResourceAvailabilitySlot.resource_id==resource_id,ResourceAvailabilitySlot.academic_term_id==academic_term_id,ResourceAvailabilitySlot.working_day_id==working_day_id,ResourceAvailabilitySlot.period_number==period_number,ResourceAvailabilitySlot.is_active.is_(True))))
         if mode=="ALL_PERIODS":
@@ -114,6 +117,28 @@ class AvailabilityService:
         if mode=="EXCEPT_BLOCKED":return "BLOCKED" not in types
         if mode=="ONLY_SELECTED":return "ALLOWED" in types
         return False
+
+    def date_exceptions(self, db, resource_type=None, resource_id=None, academic_term_id=None, exception_date=None, is_active=True):
+        query = select(ResourceDateException)
+        for column, value in ((ResourceDateException.resource_type, self.normalize_type(resource_type) if resource_type else None), (ResourceDateException.resource_id, resource_id), (ResourceDateException.academic_term_id, academic_term_id), (ResourceDateException.exception_date, exception_date), (ResourceDateException.is_active, is_active)):
+            if value is not None: query = query.where(column == value)
+        return list(db.scalars(query.order_by(ResourceDateException.exception_date, ResourceDateException.period_start, ResourceDateException.resource_type, ResourceDateException.resource_id, ResourceDateException.id)))
+
+    def create_date_exception(self, db, values):
+        kind, _ = self.resource(db, values.resource_type, values.resource_id); term = self.term(db, values.academic_term_id)
+        if values.exception_date < term.start_date or values.exception_date > term.end_date: raise HTTPException(422, "Exception date must fall within the Academic Term")
+        start, end = values.period_start, values.period_end
+        if (start is None) != (end is None) or (start is not None and end < start): raise HTTPException(422, "Provide both valid period_start and period_end, or neither for all day")
+        query = select(ResourceDateException.id).where(ResourceDateException.resource_type == kind, ResourceDateException.resource_id == values.resource_id, ResourceDateException.academic_term_id == values.academic_term_id, ResourceDateException.exception_date == values.exception_date, ResourceDateException.is_active.is_(True))
+        for row in db.scalars(query):
+            existing = db.get(ResourceDateException, row)
+            if start is None or existing.period_start is None or not (end < existing.period_start or start > existing.period_end): raise HTTPException(409, "Overlapping active resource date exception already exists")
+        now = datetime.now(timezone.utc); item = ResourceDateException(**values.model_dump(exclude={"resource_type"}), resource_type=kind, created_at=now, updated_at=now); db.add(item); db.commit(); db.refresh(item); return item
+
+    def delete_date_exception(self, db, exception_id):
+        item = db.get(ResourceDateException, exception_id)
+        if not item: raise HTTPException(404, "Resource date exception not found")
+        item.is_active = False; item.updated_at = datetime.now(timezone.utc); db.commit(); return item
 
     def list_profiles(self,db,page,page_size,resource_type=None,resource_id=None,academic_term_id=None,is_active=True):
         query=select(ResourceAvailabilityProfile)
@@ -143,7 +168,10 @@ class AvailabilityService:
 availability_service=AvailabilityService()
 
 
-def snapshot_resource_is_available(resource_type,resource_id,modes,slots,day_id,period):
+def snapshot_resource_is_available(resource_type,resource_id,modes,slots,day_id,period,actual_date=None,date_exceptions=()):
+    if actual_date:
+        matches=[item for item in date_exceptions if item[0]==resource_type and item[1]==resource_id and item[2]==actual_date and (item[3] is None or item[3] <= period <= item[4])]
+        if matches:return sorted(matches,key=lambda item:(item[3] is None,item[3] or 0),reverse=True)[0][5]=="AVAILABLE"
     mode=modes.get((resource_type,resource_id),"ALL_PERIODS")
     if mode=="ALL_PERIODS":return True
     if mode=="EXCEPT_BLOCKED":return (resource_type,resource_id,day_id,period,"BLOCKED") not in slots

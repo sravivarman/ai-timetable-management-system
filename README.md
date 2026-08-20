@@ -37,7 +37,7 @@ Open `http://127.0.0.1:8000/` for service information or `http://127.0.0.1:8000/
 
 ## Administrative reports
 
-The protected frontend Reports workspace includes six configurable administrative reports with shared filters, selectable/reorderable columns, independent multi-field sorting, preview, and Excel/CSV/Word/PDF downloads. See [docs/reports.md](docs/reports.md) for the report registry, API, export behavior, and the distinction from Master Data CSV files.
+The protected frontend Reports workspace includes eleven configurable administrative and scheduling reports with shared filters, selectable/reorderable columns, independent multi-field sorting, preview, and Excel/CSV/Word/PDF downloads. See [docs/reports.md](docs/reports.md) for the report registry, API, export behavior, and the distinction from Master Data CSV files.
 
 Health endpoints are available at:
 
@@ -145,6 +145,29 @@ Usernames are trimmed, stored in lowercase, and unique case-insensitively. They 
 Faculty, classrooms, laboratories, and registered room/faculty aliases use one term-specific availability engine. Each profile is `ALL_PERIODS`, `EXCEPT_BLOCKED`, or `ONLY_SELECTED`; slot rows are `BLOCKED` or `ALLOWED`. The frontend master-data and report views provide the same weekly editor and a business-key CSV template (`resource_type`, `resource_code`, `academic_term_code`) without UUID columns.
 
 The generic API is under `/api/v1/resource-availability`. Existing `/api/v1/laboratory-availability-blocks` requests remain supported and use the same persisted slot rows. Existing faculty `preferred` and `avoid` records remain soft scheduling preferences; hard `unavailable` records are mirrored into the unified engine.
+
+## Weekly and Slot-Based scheduling
+
+Timetable plans support two independent demand modes without duplicating the constraint engine:
+
+- `WEEKLY` preserves the recurring Monday–Saturday timetable and existing `sessions_per_week` semantics.
+- `SLOT_BASED` schedules against explicitly saved local calendar dates and explicit `sessions_required` values for each Scheduling Slot and Course Offering.
+
+Manage arbitrary Slot definitions, their actual working dates, requirement completeness, and the business-key CSV workflow from **Scheduling Slots** in the frontend. A blank requirement is missing configuration; an explicit `0` means intentionally no session in that Slot. Slot CSV templates use `academic_term`, `slot_code`, `course_code`, and `section_code`; UUIDs are resolved internally.
+
+The API groups include `/api/v1/scheduling-slots`, `/api/v1/slot-course-requirements`, and `/api/v1/semester-session-requirements`. Existing timetable and validation requests remain backward compatible and default to `WEEKLY`. A Semester Requirement is optional: blank means not configured, while zero is an intentional zero-session requirement. Slot totals are reconciled as not configured, under-, fully-, or over-allocated.
+
+Progress and reports use one session-counting service. Multi-period entries count as one session, grouped activities count only after complete group coverage, and current progress selects one authoritative active version per Slot. Approval and publication transitions capture immutable progress snapshots. Date-specific resource exceptions override recurring weekday availability and may cover one period range or the whole date.
+
+Apply migrations `0035` and `0036` before using these features:
+
+```powershell
+cd backend
+alembic upgrade head
+python -m scripts.seed
+```
+
+The seed grants Slot, Slot-requirement, and Semester-requirement management to Administrator, Timetable Coordinator, and Dean; HOD and Principal receive read-only access. Report Viewer retains only `reports.read` and receives no planning or exception write permission.
 
 When models are introduced later, generate a migration with:
 

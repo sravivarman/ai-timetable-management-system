@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import defaultdict
 from dataclasses import dataclass
 from math import ceil
 from typing import Any
@@ -37,6 +38,10 @@ from app.modules.reports.schemas import (
     OPTIONAL_ENTITY_FILTER_KEYS,
 )
 from app.modules.sections.models import Section
+from app.modules.scheduling_slots.models import SchedulingSlot, SlotCourseRequirement
+from app.modules.scheduling_slots.progress import session_counting_service
+from app.modules.timetables.models import Timetable, TimetableEntry, TimetableVersion
+from app.modules.laboratory_batches.models import LaboratoryRotationAssignment, StudentBatch
 
 
 ENTITY_FILTERS = {
@@ -47,6 +52,7 @@ ENTITY_FILTERS = {
     "course_id": Course,
     "faculty_id": Faculty,
     "faculty_department_id": Department,
+    "scheduling_slot_id": SchedulingSlot,
 }
 assert set(ENTITY_FILTERS) == set(OPTIONAL_ENTITY_FILTER_KEYS)
 
@@ -71,6 +77,7 @@ class ReportService:
             sections=list(db.scalars(select(Section).order_by(Section.section_code, Section.id))),
             courses=list(db.scalars(select(Course).order_by(Course.course_code, Course.id))),
             faculty=list(db.scalars(select(Faculty).order_by(Faculty.faculty_code, Faculty.id))),
+            scheduling_slots=[{**{field: getattr(item, field) for field in ("id", "academic_term_id", "slot_code", "slot_name", "sequence_number", "start_date", "end_date", "is_active", "created_at", "updated_at")}, "working_date_count": 0} for item in db.scalars(select(SchedulingSlot).order_by(SchedulingSlot.academic_term_id, SchedulingSlot.sequence_number, SchedulingSlot.id))],
         )
 
     """Build validated canonical results without mutating domain data."""
@@ -155,7 +162,7 @@ class ReportService:
     @staticmethod
     def _matches(row: dict[str, Any], filters: dict[str, Any]) -> bool:
         status = str(filters.get("status", "ACTIVE")).upper()
-        if status != "ALL" and row.get("record_status") != status.title():
+        if "record_status" in row and status != "ALL" and row.get("record_status") != status.title():
             return False
         for key, raw in filters.items():
             if key == "status":
@@ -234,6 +241,7 @@ class ReportService:
         if isinstance(entity, Section): return entity.section_code
         if isinstance(entity, Course): return f"{entity.course_code} • {entity.course_name}"
         if isinstance(entity, Faculty): return f"{entity.faculty_code} • {entity.full_name}"
+        if isinstance(entity, SchedulingSlot): return f"{entity.slot_code} • {entity.slot_name}"
         return "Unknown"
 
     def _provide_faculty_master(self, db: Session) -> list[dict[str, Any]]:
@@ -395,6 +403,60 @@ class ReportService:
                     "__faculty_id": member.id, "__designation": member.designation,
                     "__workload_status": workload_status, "__stable_id": f"{term.id}:{member.id}",
                 })
+        return rows
+
+    def _provide_semester_session_progress(self, db: Session) -> list[dict[str, Any]]:
+        rows=[]
+        for term_id in db.scalars(select(AcademicTerm.id).order_by(AcademicTerm.id)):
+            rows.extend(session_counting_service.progress_rows(db,term_id))
+        return rows
+
+    def _provide_slot_session_progress(self, db: Session) -> list[dict[str, Any]]:
+        rows=[]
+        for slot in db.scalars(select(SchedulingSlot).where(SchedulingSlot.is_active.is_(True)).order_by(SchedulingSlot.academic_term_id,SchedulingSlot.sequence_number,SchedulingSlot.id)):
+            rows.extend(session_counting_service.progress_rows(db,slot.academic_term_id,slot.id))
+        return rows
+
+    def _provide_slot_requirement_completeness(self, db: Session) -> list[dict[str, Any]]:
+        rows=[]; contexts=self._offering_contexts(db)
+        by_term=defaultdict(list)
+        for context in contexts:by_term[context["term"].id].append(context)
+        requirements={(item.scheduling_slot_id,item.course_offering_id):item for item in db.scalars(select(SlotCourseRequirement).where(SlotCourseRequirement.is_active.is_(True)))}
+        for slot in db.scalars(select(SchedulingSlot).where(SchedulingSlot.is_active.is_(True)).order_by(SchedulingSlot.sequence_number,SchedulingSlot.id)):
+            for context in by_term.get(slot.academic_term_id,[]):
+                item=requirements.get((slot.id,context["offering"].id));value=item.sessions_required if item else None
+                status="MISSING" if item is None else "INVALID" if value<0 else "CONFIGURED_ZERO" if value==0 else "CONFIGURED_POSITIVE"
+                rows.append({**self._base_row(context),"slot_code":slot.slot_code,"slot_name":slot.slot_name,"sessions_required":value,"requirement_status":status,"__scheduling_slot_id":slot.id,"__requirement_status":status,"__stable_id":f"{slot.id}:{context['offering'].id}"})
+        return rows
+
+    def _provide_slot_faculty_workload(self, db: Session) -> list[dict[str, Any]]:
+        rows=[]
+        for slot in db.scalars(select(SchedulingSlot).where(SchedulingSlot.is_active.is_(True)).order_by(SchedulingSlot.academic_term_id,SchedulingSlot.sequence_number,SchedulingSlot.id)):
+            rows.extend(session_counting_service.slot_faculty_workload(db,slot.academic_term_id,slot.id))
+        return rows
+
+    def _provide_slot_timetable(self, db: Session) -> list[dict[str, Any]]:
+        terms={item.id:item for item in db.scalars(select(AcademicTerm))};sections={item.id:item for item in db.scalars(select(Section))};courses={item.id:item for item in db.scalars(select(Course))};offerings={item.id:item for item in db.scalars(select(CourseOffering))};faculty={item.id:item for item in db.scalars(select(Faculty))};classrooms={item.id:item for item in db.scalars(select(Classroom))};laboratories={item.id:item for item in db.scalars(select(Laboratory))};batches={item.id:item for item in db.scalars(select(StudentBatch))};programs={item.id:item for item in db.scalars(select(Program))}
+        lab_allocations={item.id:item for item in db.scalars(select(LaboratoryFacultyAllocation))};rotation={item.id:item for item in db.scalars(select(LaboratoryRotationAssignment))};rows=[]
+        for slot in db.scalars(select(SchedulingSlot).where(SchedulingSlot.is_active.is_(True)).order_by(SchedulingSlot.academic_term_id,SchedulingSlot.sequence_number,SchedulingSlot.id)):
+            selected=session_counting_service._latest_versions_by_slot(db,slot.academic_term_id,slot_id=slot.id).get(slot.id)
+            if not selected:continue
+            version,timetable=selected;term=terms.get(slot.academic_term_id)
+            for entry in db.scalars(select(TimetableEntry).where(TimetableEntry.timetable_version_id==version.id).order_by(TimetableEntry.actual_date,TimetableEntry.period_number,TimetableEntry.section_id,TimetableEntry.id)):
+                offering=offerings.get(entry.course_offering_id);course=courses.get(offering.course_id) if offering else None;section=sections.get(entry.section_id);program=programs.get(section.program_id) if section else None
+                people=[]
+                if entry.faculty_id:people.append((entry.faculty_id,"MAIN"))
+                allocation=lab_allocations.get(entry.laboratory_faculty_allocation_id)
+                if allocation:people.append((allocation.faculty_id,allocation.role_type))
+                assignment=rotation.get(entry.laboratory_rotation_assignment_id)
+                if assignment:
+                    if assignment.main_faculty_id:people.append((assignment.main_faculty_id,"MAIN"))
+                    people.extend((UUID(value),"SUPPORTING") for value in assignment.supporting_faculty_ids or [])
+                if not people:people=[(None,None)]
+                venue_type="Laboratory" if entry.laboratory_id else "Classroom" if entry.classroom_id else "No fixed venue";venue_code=laboratories[entry.laboratory_id].laboratory_code if entry.laboratory_id in laboratories else classrooms[entry.classroom_id].room_number if entry.classroom_id in classrooms else None
+                for faculty_id,role in dict.fromkeys(people):
+                    member=faculty.get(faculty_id)
+                    rows.append({"academic_year":term.academic_year if term else None,"academic_term":term.term_name if term else None,"slot_code":slot.slot_code,"slot_name":slot.slot_name,"date":entry.actual_date.isoformat() if entry.actual_date else None,"day":entry.actual_date.strftime("%A") if entry.actual_date else None,"period":entry.period_number,"section_code":section.section_code if section else None,"student_group":batches[entry.student_batch_id].batch_name if entry.student_batch_id in batches else "Full section","course_code":course.course_code if course else None,"course_name":course.course_name if course else None,"course_type":course.course_type if course else entry.entry_type,"faculty_code":member.faculty_code if member else None,"faculty_name":member.full_name if member else None,"faculty_role":role,"venue_type":venue_type,"venue_code":venue_code,"entry_type":"LOCKED" if entry.is_locked else "MANUAL" if entry.is_manual else "GENERATED","duration":entry.session_length,"version":f"Version {version.version_number}{f' - {version.version_name}' if version.version_name else ''}","version_status":timetable.status,"__academic_term_id":slot.academic_term_id,"__scheduling_slot_id":slot.id,"__section_id":entry.section_id,"__program_id":program.id if program else None,"__department_id":program.department_id if program else None,"__course_id":offering.course_id if offering else None,"__faculty_id":faculty_id,"__course_type":course.course_type if course else entry.entry_type,"__stable_id":f"{entry.id}:{faculty_id or 'none'}"})
         return rows
 
     def _allocation_row(self, context: dict[str, Any], member: Faculty, departments: dict[UUID, Department], allocation: Any, required: Faculty | None) -> dict[str, Any]:

@@ -19,4 +19,5 @@ import app.modules.faculty_allocations.models  # noqa: F401
 import app.modules.laboratory_batches.models  # noqa: F401
 import app.modules.facilities_constraints.models  # noqa: F401
 import app.modules.timetable_validation.models  # noqa: F401
+import app.modules.scheduling_slots.models  # noqa: F401
 import app.modules.timetables.models  # noqa: F401

@@ -1,5 +1,5 @@
 import { api } from "@/lib/api-client";
-import type { AcademicTerm, Classroom, ConflictReport, Course, Department, EntryAudit, Faculty, FreeResourceResponse, Laboratory, Page, Program, QualityMetrics, ReportDefinition, ReportFilterOptions, ReportPreview, ReportRequest, Role, Section, SolverInputSnapshot, SolverRun, StatusHistory, StudentBatch, Timetable, TimetableEntry, TimetableGrid, TimetableVersion, TokenPair, User, ValidationIssue, ValidationRun, VersionComparison, WorkingDay, WorkloadPreview } from "@/lib/types";
+import type { AcademicTerm, Classroom, ConflictReport, Course, Department, EntryAudit, Faculty, FreeResourceResponse, Laboratory, Page, Program, QualityMetrics, ReportDefinition, ReportFilterOptions, ReportPreview, ReportRequest, Role, SchedulingSlot, Section, SemesterRequirement, SlotCompleteness, SlotRequirementMatrix, SlotWorkingDate, SolverInputSnapshot, SolverRun, StatusHistory, StudentBatch, Timetable, TimetableEntry, TimetableGrid, TimetableVersion, TokenPair, User, ValidationIssue, ValidationRun, VersionComparison, WorkingDay, WorkloadPreview } from "@/lib/types";
 
 export const authApi = {
   async login(username: string, password: string) { const form = new URLSearchParams({ username, password }); return (await api.post<TokenPair>("/auth/login", form, { headers: { "Content-Type": "application/x-www-form-urlencoded" } })).data },
@@ -17,6 +17,9 @@ export const usersAdminApi = {
 };
 export const timetableApi = {
   async list(params: Record<string, string | number | undefined>) { return (await api.get<Page<Timetable>>("/timetables", { params })).data },
+  async create(payload: { academic_term_id: string; scope_type: string; department_id?: string; program_id?: string; section_id?: string; scheduling_mode: "WEEKLY" | "SLOT_BASED"; scheduling_slot_id?: string; name: string }) { return (await api.post<Timetable>("/timetables", payload)).data },
+  async update(id: string, payload: { name?: string; status?: string }) { return (await api.put<Timetable>(`/timetables/${id}`, payload)).data },
+  async createVersion(id: string, payload: { validation_run_id: string; version_name?: string; source_type?: "GENERATED" | "MANUAL_COPY" | "SEMESTER_COPY" }) { return (await api.post<TimetableVersion>(`/timetables/${id}/versions`, payload)).data },
   async get(id: string) { return (await api.get<Timetable>(`/timetables/${id}`)).data },
   async versions(id: string) { return (await api.get<Page<TimetableVersion>>(`/timetables/${id}/versions`, { params: { page_size: 100 } })).data },
   async version(id: string) { return (await api.get<TimetableVersion>(`/timetable-versions/${id}`)).data },
@@ -35,7 +38,7 @@ export const solverApi = {
   async quality(id: string) { return (await api.get<QualityMetrics>(`/solver-runs/${id}/quality`)).data },
 };
 export const validationApi = {
-  async run(payload: { academic_term_id: string; scope_type: string; department_id?: string; program_id?: string; section_id?: string }) { return (await api.post<ValidationRun>("/timetable-validation/run", payload)).data },
+  async run(payload: { academic_term_id: string; scope_type: string; department_id?: string; program_id?: string; section_id?: string; scheduling_mode?: "WEEKLY"|"SLOT_BASED"; scheduling_slot_id?:string }) { return (await api.post<ValidationRun>("/timetable-validation/run", payload)).data },
   async list(params: { academic_term_id?: string; scope_type?: string; status?: string; page?: number; page_size?: number }) { return (await api.get<Page<ValidationRun>>("/timetable-validation/runs", { params })).data },
   async get(id: string) { return (await api.get<ValidationRun>(`/timetable-validation/runs/${id}`)).data },
   async issues(id: string, params: { severity?: string; issue_code?: string; page?: number; page_size?: number } = {}) { return (await api.get<Page<ValidationIssue>>(`/timetable-validation/runs/${id}/issues`, { params })).data },
@@ -69,12 +72,27 @@ export const versionOperationsApi = {
   async solve(id: string, payload: { optimization_profile: string; time_limit_seconds?: number; random_seed: number; weight_overrides: Record<string, number> }) { return (await api.post<SolverRun>(`/timetable-versions/${id}/solve`, payload)).data },
   async copy(id: string, payload: { version_name: string; source_type: "MANUAL_COPY" }) { return (await api.post<TimetableVersion>(`/timetable-versions/${id}/copy`, payload)).data },
   async compare(id: string, otherId: string) { return (await api.get<VersionComparison>(`/timetable-versions/${id}/compare/${otherId}`)).data },
-  async free(id: string, kind: "faculty" | "classrooms" | "laboratories", workingDayId: string, periodNumber: number) { return (await api.get<FreeResourceResponse>(`/timetable-versions/${id}/free-${kind}`, { params: { working_day_id: workingDayId, period_number: periodNumber } })).data },
+  async free(id: string, kind: "faculty" | "classrooms" | "laboratories", workingDayId: string, periodNumber: number, actualDate?:string) { return (await api.get<FreeResourceResponse>(`/timetable-versions/${id}/free-${kind}`, { params: { working_day_id: workingDayId, actual_date:actualDate, period_number: periodNumber } })).data },
 };
 export const entryOperationsApi = {
-  async move(id: string, payload: { working_day_id: string; period_number: number; classroom_id?: string | null; laboratory_id?: string | null; lock_after_move: boolean }) { return (await api.post<TimetableEntry>(`/timetable-entries/${id}/move`, payload)).data },
+  async move(id: string, payload: { working_day_id: string; actual_date?:string|null; period_number: number; classroom_id?: string | null; laboratory_id?: string | null; lock_after_move: boolean }) { return (await api.post<TimetableEntry>(`/timetable-entries/${id}/move`, payload)).data },
   async lock(id: string, reason?: string) { return (await api.post<TimetableEntry>(`/timetable-entries/${id}/lock`, { reason: reason || null })).data },
   async unlock(id: string, reason: string) { return (await api.post<TimetableEntry>(`/timetable-entries/${id}/unlock`, { reason })).data },
   async audit(id: string) { return (await api.get<EntryAudit[]>(`/timetable-entries/${id}/audit`)).data },
+};
+export const schedulingSlotApi={
+ async list(params:Record<string,string|number|boolean|undefined>={}){return(await api.get<Page<SchedulingSlot>>("/scheduling-slots",{params:{page_size:100,...params}})).data},
+ async get(id:string){return(await api.get<SchedulingSlot>(`/scheduling-slots/${id}`)).data},
+ async create(payload:Omit<SchedulingSlot,"id"|"working_date_count"|"created_at"|"updated_at"|"is_active">){return(await api.post<SchedulingSlot>("/scheduling-slots",payload)).data},
+ async update(id:string,payload:Partial<Pick<SchedulingSlot,"slot_code"|"slot_name"|"sequence_number"|"start_date"|"end_date">>){return(await api.put<SchedulingSlot>(`/scheduling-slots/${id}`,payload)).data},
+ async deactivate(id:string){await api.delete(`/scheduling-slots/${id}`)},async restore(id:string){return(await api.post<SchedulingSlot>(`/scheduling-slots/${id}/restore`)).data},
+ async dates(id:string){return(await api.get<SlotWorkingDate[]>(`/scheduling-slots/${id}/working-dates`)).data},
+ async setDates(id:string,working_dates:string[],replace=true){return(await api.post<SlotWorkingDate[]>(`/scheduling-slots/${id}/working-dates`,{working_dates,replace})).data},
+ async matrix(academicTermId:string,params:Record<string,string|undefined>={}){return(await api.get<SlotRequirementMatrix>("/slot-course-requirements/matrix",{params:{academic_term_id:academicTermId,...params}})).data},
+ async completeness(id:string){return(await api.get<SlotCompleteness>(`/scheduling-slots/${id}/completeness`)).data},
+ async bulk(cells:{scheduling_slot_id:string;course_offering_id:string;sessions_required?:number;clear?:boolean;expected_updated_at?:string|null}[]){return(await api.post<{inserted:number;updated:number;cleared:number;warnings?:{course_offering_id:string;code:string;message:string}[]}>("/slot-course-requirements/bulk",{cells})).data},
+ async copy(source_slot_id:string,target_slot_id:string,overwrite=false){return(await api.post<{inserted:number;updated:number;cleared:number}>("/slot-course-requirements/copy",{source_slot_id,target_slot_id,overwrite})).data},
+ async semesterList(academicTermId:string){return(await api.get<Page<SemesterRequirement>>("/semester-session-requirements",{params:{academic_term_id:academicTermId,page_size:100}})).data},
+ async semesterBulk(cells:{academic_term_id:string;course_offering_id:string;total_sessions_required?:number;clear?:boolean;expected_updated_at?:string|null}[]){return(await api.post<{inserted:number;updated:number;cleared:number}>("/semester-session-requirements/bulk",{cells})).data},
 };
 export async function listAcademicTerms() { return (await api.get<Page<AcademicTerm>>("/academic-terms", { params: { page_size: 100 } })).data }

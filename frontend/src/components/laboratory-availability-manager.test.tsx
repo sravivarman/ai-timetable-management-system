@@ -76,4 +76,21 @@ describe("laboratory availability manager", () => {
     const exported = vi.mocked(downloadCsv).mock.calls[0][1][0];
     expect(Object.keys(exported).some((key)=>key.endsWith("_id"))).toBe(false);
   });
+
+  it("creates an exact-date exception with the selected readable resource context", async () => {
+    vi.mocked(api.get).mockImplementation(async (url) => url === "/resource-availability/date-exceptions" ? ({ data: [] } as never) : ({ data: { items: url === "/resource-availability/profiles" ? [{ id: "profile-1", availability_mode: "EXCEPT_BLOCKED" }] : [] } } as never));
+    const user = userEvent.setup();
+    renderWithProviders(<LaboratoryAvailabilityManager canManage initialLaboratoryId="lab-1" initialTermId="term-1" />);
+    await user.type(await screen.findByLabelText("Exception date"), "2026-09-18");
+    await user.click(screen.getByRole("button", { name: "Add exception" }));
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith("/resource-availability/date-exceptions", expect.objectContaining({ resource_type: "LABORATORY", resource_id: "lab-1", academic_term_id: "term-1", exception_date: "2026-09-18", period_start: 1, period_end: 7, availability_status: "UNAVAILABLE" })));
+  });
+
+  it("keeps Report Viewer style read-only access free of exception write controls", async () => {
+    vi.mocked(api.get).mockImplementation(async (url) => url === "/resource-availability/date-exceptions" ? ({ data: [] } as never) : ({ data: { items: url === "/resource-availability/profiles" ? [{ id: "profile-1", availability_mode: "EXCEPT_BLOCKED" }] : [] } } as never));
+    renderWithProviders(<LaboratoryAvailabilityManager initialLaboratoryId="lab-1" initialTermId="term-1" />);
+    await screen.findByText("Date-specific exceptions");
+    expect(screen.queryByRole("button", { name: "Add exception" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Download exception CSV template" })).not.toBeInTheDocument();
+  });
 });

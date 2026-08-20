@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -7,7 +8,8 @@ from app.db.session import get_db
 from app.modules.authentication.dependencies import get_current_user
 from app.modules.authentication.models import User
 from app.modules.resource_availability.registry import RESOURCE_REGISTRY, registration
-from app.modules.resource_availability.schemas import ResourceAvailabilityProfileResponse, ResourceAvailabilityProfileUpdate, ResourceAvailabilitySlotCreate, ResourceAvailabilitySlotResponse, ResourceAvailabilitySlotUpdate
+from app.modules.resource_availability.models import ResourceDateException
+from app.modules.resource_availability.schemas import ResourceAvailabilityProfileResponse, ResourceAvailabilityProfileUpdate, ResourceAvailabilitySlotCreate, ResourceAvailabilitySlotResponse, ResourceAvailabilitySlotUpdate, ResourceDateExceptionCreate, ResourceDateExceptionResponse
 from app.modules.resource_availability.service import availability_service as service
 
 router=APIRouter(prefix="/resource-availability",tags=["resource availability"])
@@ -58,3 +60,20 @@ def delete_slot(slot_id:UUID,db:Session=Depends(get_db),user:User=Depends(get_cu
 @router.post("/slots/{slot_id}/restore",response_model=ResourceAvailabilitySlotResponse)
 def restore_slot(slot_id:UUID,db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     slot=service.get_slot(db,slot_id);authorize(user,slot.resource_type,"manage");return service.restore_slot(db,slot_id)
+
+
+@router.get("/date-exceptions", response_model=list[ResourceDateExceptionResponse])
+def date_exceptions(resource_type: str, resource_id: UUID | None = None, academic_term_id: UUID | None = None, exception_date: date | None = None, is_active: bool | None = True, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    authorize(user, resource_type, "read"); return service.date_exceptions(db, resource_type, resource_id, academic_term_id, exception_date, is_active)
+
+
+@router.post("/date-exceptions", response_model=ResourceDateExceptionResponse, status_code=201)
+def create_date_exception(payload: ResourceDateExceptionCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    authorize(user, payload.resource_type, "manage"); return service.create_date_exception(db, payload)
+
+
+@router.delete("/date-exceptions/{exception_id}", status_code=204)
+def delete_date_exception(exception_id: UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    item = db.get(ResourceDateException, exception_id)
+    if item is None: raise HTTPException(404, "Resource date exception not found")
+    authorize(user, item.resource_type, "manage"); service.delete_date_exception(db, exception_id); return Response(status_code=204)

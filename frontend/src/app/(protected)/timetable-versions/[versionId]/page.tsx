@@ -91,7 +91,7 @@ export default function VersionPage() {
     {tab === "Quality" && <Card title="Solver quality">{!isOperationalReader ? <EmptyState title="Solver quality is not available for your role" /> : runs.isLoading ? <LoadingState /> : <QualityPanel runId={latestSuccessfulRun?.id} labels={qualityLabels} />}</Card>}
     {tab === "Conflicts" && <Card title="Conflict analysis">{conflicts.isLoading ? <LoadingState /> : conflicts.isError ? <ErrorState message={apiErrorMessage(conflicts.error)} retry={() => void conflicts.refetch()} /> : <ConflictsPanel report={conflicts.data!} entries={entries.data?.items} grid={sectionGrid.data} />}</Card>}
     {tab === "Comparison" && <Card title="Compare versions"><ComparisonPanel version={item} /></Card>}
-    {tab === "Free Resources" && <FreeResourcesPanel versionId={versionId} workingDays={sectionGrid.data?.days.map((day) => ({ id: day.working_day_id, name: day.day_name }))} />}
+    {tab === "Free Resources" && <FreeResourcesPanel versionId={versionId} workingDays={sectionGrid.data?.days.map((day) => ({ id: day.working_day_id, actualDate: day.actual_date, name: day.actual_date ? `${formatDate(day.actual_date)} · ${day.day_name}` : day.day_name }))} />}
   </>;
 }
 
@@ -113,3 +113,5 @@ function resourceOptions(entries: TimetableEntry[], grid: TimetableGrid | undefi
   }
   return Object.fromEntries(Object.entries(values).map(([type, map]) => [type, Array.from(map, ([id, label]) => ({ id, label })).sort((a, b) => a.label.localeCompare(b.label))])) as Record<TimetableViewType, ViewOption[]>;
 }
+
+function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }

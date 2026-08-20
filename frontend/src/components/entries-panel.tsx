@@ -27,7 +27,7 @@ export function EntriesPanel({ entries, grid, versionId, editable = false, disab
 
   const rows = entries.filter((entry) =>
     (!type || entry.entry_type === type) &&
-    (!day || entry.working_day_id === day) &&
+    (!day || (entry.actual_date ?? entry.working_day_id) === day) &&
     (!faculty || entry.faculty_id === faculty) &&
     (!batch || entry.student_batch_id === batch) &&
     (!locked || String(entry.is_locked) === locked) &&
@@ -37,7 +37,7 @@ export function EntriesPanel({ entries, grid, versionId, editable = false, disab
   return <>
     <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
       <Filter label="Entry type" value={type} onChange={setType} options={["THEORY", "LABORATORY", "PRACTICAL", "CDC", "LSM", "PROJECT", "MINI_PROJECT"]} />
-      <Filter label="Working day" value={day} onChange={setDay} options={grid?.days.map((item) => [item.working_day_id, item.day_name]) ?? []} />
+      <Filter label={grid?.scheduling_mode === "SLOT_BASED" ? "Working date" : "Working day"} value={day} onChange={setDay} options={grid?.days.map((item) => [item.actual_date ?? item.working_day_id, item.actual_date ? `${formatDate(item.actual_date)} · ${item.day_name}` : item.day_name]) ?? []} />
       <Filter label="Faculty" value={faculty} onChange={setFaculty} options={Array.from(facultyLabels)} />
       <Filter label="Batch" value={batch} onChange={setBatch} options={Array.from(batchLabels)} />
       <Filter label="Lock status" value={locked} onChange={setLocked} options={[["true", "Locked"], ["false", "Unlocked"]]} />
@@ -49,7 +49,7 @@ export function EntriesPanel({ entries, grid, versionId, editable = false, disab
         <tbody className="divide-y">{rows.map((row) => {
           const detail = readable.get(row.id);
           return <tr key={row.id} id={`entry-${row.id}`}>
-            <td className="px-3 py-3">{detail?.day_name ?? "Working day unavailable"} · P{row.period_number}</td>
+            <td className="px-3 py-3">{row.actual_date && <span className="block font-medium">{formatDate(row.actual_date)}</span>}{detail?.day_name ?? "Working day unavailable"} · P{row.period_number}</td>
             <td className="px-3 py-3"><p className="font-medium">{detail?.course_code ?? "Course metadata unavailable"}</p><p className="text-xs text-slate-500">{detail?.course_name ?? row.entry_type}</p>{detail?.combined_section_codes?.length && <p className="mt-1 text-xs font-semibold text-indigo-700">Combined: {detail.combined_section_codes.join(" + ")}</p>}</td>
             <td className="px-3 py-3">{detail?.faculty_code ?? (row.faculty_id ? "Faculty metadata unavailable" : "—")}</td>
             <td className="px-3 py-3">{detail?.laboratory_code ?? detail?.classroom_room_number ?? ((row.laboratory_id || row.classroom_id) ? "Facility metadata unavailable" : "—")}</td>
@@ -74,3 +74,5 @@ function Filter({ label, value, onChange, options }: { label: string; value: str
     })}
   </select>;
 }
+
+function formatDate(value: string) { return new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`)); }

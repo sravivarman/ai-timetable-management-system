@@ -89,6 +89,12 @@ PERMISSION_DEFINITIONS = {
     ("combined_teaching_groups", "manage"): "Manage combined teaching groups",
     ("reports", "read"): "Preview and export administrative reports",
     ("account_password", "change_self"): "Change the current account password",
+    ("scheduling_slots", "read"): "View Scheduling Slots and actual working dates",
+    ("scheduling_slots", "manage"): "Manage Scheduling Slots and actual working dates",
+    ("slot_requirements", "read"): "View Slot Course Requirements and completeness",
+    ("slot_requirements", "manage"): "Manage Slot Course Requirements",
+    ("semester_requirements", "read"): "View Semester Session Requirements and reconciliation",
+    ("semester_requirements", "manage"): "Manage Semester Session Requirements",
 }
 
 DEPARTMENT_DEFINITIONS = {
@@ -183,6 +189,9 @@ def seed() -> None:
         combined_permissions = [existing_permissions[("combined_teaching_groups", action)] for action in ("read", "manage")]
         reports_read = existing_permissions[("reports", "read")]
         change_own_password = existing_permissions[("account_password", "change_self")]
+        slot_read, slot_manage = existing_permissions[("scheduling_slots", "read")], existing_permissions[("scheduling_slots", "manage")]
+        requirement_read, requirement_manage = existing_permissions[("slot_requirements", "read")], existing_permissions[("slot_requirements", "manage")]
+        semester_read, semester_manage = existing_permissions[("semester_requirements", "read")], existing_permissions[("semester_requirements", "manage")]
         hod_role = existing_roles["HOD"]
         if departments_view not in administrator_role.permissions:
             administrator_role.permissions.append(departments_view)
@@ -291,6 +300,14 @@ def seed() -> None:
 
         report_viewer_role = existing_roles["REPORT_VIEWER"]
         report_viewer_role.permissions = [reports_read]
+        for role in (administrator_role, timetable_coordinator_role):
+            for permission in (slot_read, slot_manage, requirement_read, requirement_manage, semester_read, semester_manage):
+                if permission not in role.permissions: role.permissions.append(permission)
+        for permission in (slot_read, slot_manage, requirement_read, requirement_manage, semester_read, semester_manage):
+            if permission not in existing_roles["Dean"].permissions: existing_roles["Dean"].permissions.append(permission)
+        for role in (hod_role, existing_roles["Principal"]):
+            for permission in (slot_read, requirement_read, semester_read):
+                if permission not in role.permissions: role.permissions.append(permission)
         for role in (administrator_role, timetable_coordinator_role, existing_roles["Dean"], existing_roles["Principal"]):
             if change_own_password not in role.permissions:
                 role.permissions.append(change_own_password)

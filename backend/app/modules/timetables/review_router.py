@@ -1,3 +1,4 @@
+from datetime import date
 from uuid import UUID
 from fastapi import APIRouter,Depends,HTTPException,Query
 from sqlalchemy.orm import Session
@@ -46,11 +47,11 @@ def copy_version(version_id:UUID,payload:VersionCopyRequest,db:Session=Depends(g
 @review_version_router.get("/{version_id}/compare/{other_version_id}",response_model=VersionComparisonResponse,dependencies=[view_permission])
 def compare(version_id:UUID,other_version_id:UUID,db:Session=Depends(get_db)):return review_service.compare(db,version_id,other_version_id)
 @review_version_router.get("/{version_id}/free-faculty",response_model=FreeResourceResponse,dependencies=[view_permission])
-def free_faculty(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"faculty",working_day_id,period_number)
+def free_faculty(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),actual_date:date|None=None,db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"faculty",working_day_id,period_number,actual_date=actual_date)
 @review_version_router.get("/{version_id}/free-classrooms",response_model=FreeResourceResponse,dependencies=[view_permission])
-def free_classrooms(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"classroom",working_day_id,period_number)
+def free_classrooms(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),actual_date:date|None=None,db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"classroom",working_day_id,period_number,actual_date=actual_date)
 @review_version_router.get("/{version_id}/free-laboratories",response_model=FreeResourceResponse,dependencies=[view_permission])
-def free_laboratories(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),section_id:UUID|None=None,student_batch_id:UUID|None=None,db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"laboratory",working_day_id,period_number,section_id,student_batch_id)
+def free_laboratories(version_id:UUID,working_day_id:UUID,period_number:int=Query(ge=1,le=7),actual_date:date|None=None,section_id:UUID|None=None,student_batch_id:UUID|None=None,db:Session=Depends(get_db)):return review_service.free_resources(db,version_id,"laboratory",working_day_id,period_number,section_id,student_batch_id,actual_date)
 @review_version_router.get("/{version_id}/conflicts",response_model=ConflictReportResponse,dependencies=[view_permission])
 def conflicts(version_id:UUID,db:Session=Depends(get_db)):return review_service.conflicts(db,version_id)
 

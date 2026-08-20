@@ -9,11 +9,12 @@ from app.modules.departments.schemas import DepartmentRead
 from app.modules.faculty.schemas import FacultyRead
 from app.modules.programs.schemas import ProgramRead
 from app.modules.sections.schemas import SectionRead
+from app.modules.scheduling_slots.schemas import SchedulingSlotResponse
 
 
 OPTIONAL_ENTITY_FILTER_KEYS = frozenset({
     "academic_term_id", "department_id", "program_id", "section_id",
-    "course_id", "faculty_id", "faculty_department_id",
+    "course_id", "faculty_id", "faculty_department_id", "scheduling_slot_id",
 })
 
 
@@ -99,6 +100,7 @@ class ReportFilterOptionsResponse(BaseModel):
     sections: list[SectionRead]
     courses: list[CourseRead]
     faculty: list[FacultyRead]
+    scheduling_slots: list[SchedulingSlotResponse]
 
 
 class ReportPreviewResponse(BaseModel):

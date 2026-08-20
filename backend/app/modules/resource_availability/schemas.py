@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
@@ -41,6 +41,25 @@ class ResourceAvailabilitySlotUpdate(BaseModel):
 
 
 class ResourceAvailabilitySlotResponse(ResourceAvailabilitySlotCreate):
+    model_config = ConfigDict(from_attributes=True)
+    id: UUID
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResourceDateExceptionCreate(BaseModel):
+    resource_type: str
+    resource_id: UUID
+    academic_term_id: UUID
+    exception_date: date
+    period_start: int | None = Field(default=None, ge=1, le=7)
+    period_end: int | None = Field(default=None, ge=1, le=7)
+    availability_status: Literal["AVAILABLE", "UNAVAILABLE"]
+    reason: str | None = None
+
+
+class ResourceDateExceptionResponse(ResourceDateExceptionCreate):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
     is_active: bool

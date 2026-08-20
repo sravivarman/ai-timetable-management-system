@@ -50,10 +50,10 @@ class UsernameReportViewerTests(unittest.TestCase):
         headers = self.context.headers["viewer"]
         definitions = self.client.get("/api/v1/reports/definitions", headers=headers)
         self.assertEqual(definitions.status_code, 200)
-        self.assertEqual(len(definitions.json()), 6)
+        self.assertEqual(len(definitions.json()), 11)
         options = self.client.get("/api/v1/reports/filter-options", headers=headers)
         self.assertEqual(options.status_code, 200)
-        self.assertEqual(set(options.json()), {"academic_terms", "departments", "programs", "sections", "courses", "faculty"})
+        self.assertEqual(set(options.json()), {"academic_terms", "departments", "programs", "sections", "courses", "faculty", "scheduling_slots"})
         for definition in definitions.json():
             payload = {
                 "report_key": definition["key"],

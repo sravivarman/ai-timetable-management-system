@@ -1,5 +1,5 @@
 """First prerequisite validation rule group."""
-from sqlalchemy import select
+from sqlalchemy import func, select
 from app.modules.academic_terms.models import AcademicTerm
 from app.modules.departments.models import Department
 from app.modules.programs.models import Program
@@ -19,9 +19,10 @@ from app.modules.schedule_configuration.models import PeriodTiming
 from app.modules.facilities.models import Classroom, Laboratory
 from app.modules.resource_availability.models import ResourceAvailabilitySlot
 from app.modules.resource_availability.service import availability_service
-from app.modules.laboratory_batches.models import StudentBatch,LaboratoryBatchConfiguration,LaboratoryRotationGroup
+from app.modules.laboratory_batches.models import StudentBatch,LaboratoryBatchConfiguration,LaboratoryRotationGroup,LaboratoryRotationAssignment
 from app.modules.laboratory_batches.services import service as rotation_service
 from app.modules.facilities_constraints.models import LaboratoryAvailabilityBlock
+from app.modules.scheduling_slots.models import CourseOfferingSemesterRequirement, SchedulingSlot, SchedulingSlotWorkingDate, SlotCourseRequirement
 
 def validate(db, request):
  issues=[]
@@ -32,6 +33,8 @@ def validate(db, request):
  if not term or not term.is_active:add("TERM_INACTIVE","Academic term does not exist or is inactive","academic_term",request.academic_term_id)
  valid={"COLLEGE":not any((request.department_id,request.program_id,request.section_id)),"DEPARTMENT":request.department_id is not None and request.program_id is None and request.section_id is None,"PROGRAM":request.program_id is not None and request.department_id is None and request.section_id is None,"SECTION":request.section_id is not None and request.department_id is None and request.program_id is None}
  if not valid.get(request.scope_type):add("INVALID_SCOPE","Scope identifiers do not match scope type")
+ if request.scheduling_mode=="WEEKLY" and request.scheduling_slot_id is not None:add("INVALID_SCHEDULING_MODE","WEEKLY validation must not specify a Scheduling Slot")
+ if request.scheduling_mode=="SLOT_BASED" and request.scheduling_slot_id is None:add("INVALID_SCHEDULING_MODE","SLOT_BASED validation requires a Scheduling Slot")
  if request.department_id:
   x=db.scalar(select(Department).where(Department.id==request.department_id));
   if not x or not x.is_active:add("INVALID_SCOPE","Scoped department is inactive","department",request.department_id)
@@ -49,6 +52,19 @@ def validate(db, request):
  days=list(db.scalars(select(WorkingDay).where(WorkingDay.is_active.is_(True),WorkingDay.is_working_day.is_(True))))
  validated_labs=set()
  if not sections:add("NO_ACTIVE_SECTIONS","No active sections exist in the selected scope")
+ slot=None;slot_requirements={};slot_dates=[];semester_requirements={};semester_allocated={}
+ if request.scheduling_mode=="SLOT_BASED" and request.scheduling_slot_id:
+  executed+=4
+  slot=db.get(SchedulingSlot,request.scheduling_slot_id)
+  if not slot or not slot.is_active:add("SLOT_INACTIVE","Scheduling Slot does not exist or is inactive","scheduling_slot",request.scheduling_slot_id)
+  elif slot.academic_term_id!=request.academic_term_id:add("SLOT_TERM_MISMATCH",f"Scheduling Slot {slot.slot_code} does not belong to the selected Academic Term","scheduling_slot",slot.id)
+  else:
+   slot_dates=list(db.scalars(select(SchedulingSlotWorkingDate).where(SchedulingSlotWorkingDate.scheduling_slot_id==slot.id,SchedulingSlotWorkingDate.is_active.is_(True)).order_by(SchedulingSlotWorkingDate.working_date)))
+   if not slot_dates:add("SLOT_NO_WORKING_DATES",f"Scheduling Slot {slot.slot_code} has no active working dates.","scheduling_slot",slot.id)
+   requirements=list(db.scalars(select(SlotCourseRequirement).where(SlotCourseRequirement.scheduling_slot_id==slot.id,SlotCourseRequirement.is_active.is_(True))))
+   slot_requirements={row.course_offering_id:row for row in requirements}
+   semester_requirements={row.course_offering_id:row for row in db.scalars(select(CourseOfferingSemesterRequirement).where(CourseOfferingSemesterRequirement.academic_term_id==request.academic_term_id,CourseOfferingSemesterRequirement.is_active.is_(True)))}
+   semester_allocated=dict(db.execute(select(SlotCourseRequirement.course_offering_id,func.sum(SlotCourseRequirement.sessions_required)).join(SchedulingSlot).where(SchedulingSlot.academic_term_id==request.academic_term_id,SchedulingSlot.is_active.is_(True),SlotCourseRequirement.is_active.is_(True)).group_by(SlotCourseRequirement.course_offering_id)).all())
  for section in sections:
   executed+=4  # term, strength, primary-classroom, and offering presence
   if section.academic_term_id!=request.academic_term_id:add("SECTION_TERM_MISMATCH","Section does not belong to selected academic term","section",section.id)
@@ -60,6 +76,15 @@ def validate(db, request):
   for offering in offerings:
    executed+=4  # activity, term, override, and course activity
    if not offering.is_active:add("OFFERING_INACTIVE","Course offering is inactive","course_offering",offering.id)
+   if request.scheduling_mode=="SLOT_BASED" and offering.is_active:
+    executed+=1;requirement=slot_requirements.get(offering.id)
+    if requirement is None:add("SLOT_REQUIREMENT_MISSING",f"Slot {slot.slot_code if slot else 'unknown'}: Course Offering has no explicit Slot Session Requirement.","course_offering",offering.id)
+    elif requirement.sessions_required<0:add("SLOT_REQUIREMENT_INVALID","Slot sessions_required must be a non-negative integer","slot_course_requirement",requirement.id)
+    semester=semester_requirements.get(offering.id)
+    if semester:
+     executed+=1;allocated=int(semester_allocated.get(offering.id,0) or 0)
+     if allocated>semester.total_sessions_required:add("SEMESTER_SESSIONS_OVER_ALLOCATED",f"Course Offering is over-allocated across Slots by {allocated-semester.total_sessions_required} session(s).","course_offering",offering.id)
+     elif allocated<semester.total_sessions_required:warn("SEMESTER_SESSIONS_UNDER_ALLOCATED",f"Course Offering still has {semester.total_sessions_required-allocated} semester session(s) to allocate.","course_offering",offering.id)
    if offering.academic_term_id!=section.academic_term_id:add("OFFERING_TERM_MISMATCH","Offering term does not match section term","course_offering",offering.id)
    if offering.weekly_periods_override is not None and offering.weekly_periods_override<=0:add("WEEKLY_PERIODS_INVALID","Weekly periods override must be positive","course_offering",offering.id)
    course=db.scalar(select(Course).where(Course.id==offering.course_id))
@@ -132,6 +157,16 @@ def validate(db, request):
       for code,severity,message in availability_service.validate(db,"LABORATORY",laboratory.id,request.academic_term_id):
        add(code,message,"laboratory",laboratory.id);add(aliases[code],message,"laboratory",laboratory.id)
        if code=="RESOURCE_NO_AVAILABLE_PERIODS":add("LABORATORY_FULLY_BLOCKED","Laboratory is unavailable for every working period","laboratory",laboratory.id)
+ if request.scheduling_mode=="SLOT_BASED" and slot_dates:
+  for section in sections:
+   contact_periods=0
+   for offering in db.scalars(select(CourseOffering).where(CourseOffering.section_id==section.id,CourseOffering.is_active.is_(True))):
+    requirement=slot_requirements.get(offering.id);course=db.get(Course,offering.course_id)
+    if requirement and course:
+     duration=course.lab_session_duration if course.course_type=="LABORATORY" and course.lab_session_duration else course.session_duration
+     contact_periods+=requirement.sessions_required*duration
+   executed+=1;capacity=len(slot_dates)*7
+   if contact_periods>capacity:add("SLOT_SECTION_CAPACITY_EXCEEDED",f"Slot {slot.slot_code}: {section.section_code} requires {contact_periods} contact periods but only {capacity} period positions exist across {len(slot_dates)} working dates.","section",section.id)
  scoped_section_ids={section.id for section in sections}
  # Combined teaching is a shared event across complete section offerings, not
  # student-group rotation. Validate its independent compatibility contract.
@@ -150,6 +185,9 @@ def validate(db, request):
   if any(not section or not section.student_strength or section.student_strength<=0 for section in member_sections):add("COMBINED_TEACHING_SECTION_STRENGTH_MISSING","Every participating section requires positive strength","combined_teaching_group",group.id)
   course=db.get(Course,group.course_id);effective={offering.weekly_periods_override or course.weekly_periods for offering in member_offerings if offering and course}
   if not course or len(effective)!=1 or next(iter(effective),0)!=course.session_duration*course.sessions_per_week:add("COMBINED_TEACHING_SESSION_MISMATCH","Combined offerings require one compatible complete session pattern","combined_teaching_group",group.id)
+  if request.scheduling_mode=="SLOT_BASED":
+   demands={slot_requirements[offering.id].sessions_required for offering in member_offerings if offering and offering.id in slot_requirements}
+   if len(demands)>1:add("SLOT_COMBINED_DEMAND_MISMATCH",f"Slot {slot.slot_code}: combined teaching members have unequal sessions_required; remainder scheduling is not yet safe.","combined_teaching_group",group.id)
   allocation_model=LaboratoryFacultyAllocation if course and uses_activity_faculty_allocations(course) else TheoryFacultyAllocation
   allocated={offering.id for offering in member_offerings if offering and db.scalar(select(allocation_model.id).where(allocation_model.course_offering_id==offering.id,allocation_model.faculty_id==group.faculty_id,allocation_model.is_active.is_(True),*((allocation_model.role_type=="MAIN",) if allocation_model is LaboratoryFacultyAllocation else ())))}
   if not group.faculty_id:add("COMBINED_TEACHING_FACULTY_MISSING","Combined teaching requires faculty","combined_teaching_group",group.id)
@@ -165,6 +203,10 @@ def validate(db, request):
  for rotation_group in rotation_groups:
   rotation_issues=rotation_service.rotation_issues(db,rotation_group);executed+=max(1,8)
   for issue in rotation_issues:add(issue["issue_code"],issue["message"],"laboratory_rotation_group",rotation_group.id)
+  if request.scheduling_mode=="SLOT_BASED":
+   offering_ids=set(db.scalars(select(LaboratoryRotationAssignment.course_offering_id).where(LaboratoryRotationAssignment.rotation_group_id==rotation_group.id,LaboratoryRotationAssignment.is_active.is_(True))))
+   demands={slot_requirements[value].sessions_required for value in offering_ids if value in slot_requirements}
+   if len(demands)>1:add("SLOT_ROTATION_DEMAND_MISMATCH",f"Slot {slot.slot_code}: synchronized rotation activities must have equal sessions_required.","laboratory_rotation_group",rotation_group.id)
  for section in sections:
   rotating_configs=list(db.scalars(select(LaboratoryBatchConfiguration).join(CourseOffering,CourseOffering.id==LaboratoryBatchConfiguration.course_offering_id).where(LaboratoryBatchConfiguration.section_id==section.id,LaboratoryBatchConfiguration.is_active.is_(True),LaboratoryBatchConfiguration.is_rotation_enabled.is_(True),CourseOffering.academic_term_id==request.academic_term_id)))
   multi=[configuration for configuration in rotating_configs if configuration.number_of_groups>1]

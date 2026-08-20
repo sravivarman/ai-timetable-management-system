@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, CalendarDays, CheckCircle2, FileBarChart, LayoutDashboard, LogOut, Menu, Moon, Settings, SlidersHorizontal, Sun, UserCog, X } from "lucide-react";
+import { BookOpen, CalendarClock, CalendarDays, CheckCircle2, FileBarChart, LayoutDashboard, LogOut, Menu, Moon, Settings, SlidersHorizontal, Sun, UserCog, X } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 import clsx from "clsx";
 import { Breadcrumbs } from "@/components/breadcrumbs";
@@ -14,6 +14,7 @@ const administrators = ["Administrator", "System Administrator"];
 const items: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Timetables", href: "/timetables", icon: CalendarDays, roles: [...administrators, "Timetable Coordinator", "HOD", "Dean", "Principal"] },
+  { label: "Scheduling Slots", href: "/scheduling-slots", icon: CalendarClock, roles: [...administrators, "Timetable Coordinator", "HOD", "Dean", "Principal"] },
   { label: "Validation", href: "/validation", icon: CheckCircle2, roles: [...administrators, "Timetable Coordinator", "HOD", "Dean", "Principal"] },
   { label: "Solver Runs", href: "/solver-runs", icon: SlidersHorizontal, roles: [...administrators, "Timetable Coordinator", "HOD", "Dean", "Principal"] },
   { label: "Master Data", href: "/master-data", icon: BookOpen, roles: [...administrators, "Timetable Coordinator", "HOD"] },

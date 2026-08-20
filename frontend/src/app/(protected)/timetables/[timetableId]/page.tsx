@@ -5,7 +5,7 @@ import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Card, EmptyState, ErrorState, LoadingState, PageHeader, StatusBadge } from "@/components/ui";
-import { timetableApi } from "@/lib/api";
+import { schedulingSlotApi, timetableApi } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-client";
 import { queryKeys } from "@/lib/query-keys";
 import { useAuth } from "@/providers/auth-provider";
@@ -26,6 +26,7 @@ export default function TimetableDetailPage() {
   const { hasRole } = useAuth();
   const { notify } = useToast();
   const timetable = useQuery({ queryKey: queryKeys.timetable(timetableId), queryFn: () => timetableApi.get(timetableId) });
+  const slot = useQuery({ queryKey: ["scheduling-slot", timetable.data?.scheduling_slot_id], queryFn: () => schedulingSlotApi.get(timetable.data!.scheduling_slot_id!), enabled: Boolean(timetable.data?.scheduling_slot_id) });
   const versions = useQuery({ queryKey: queryKeys.versions(timetableId), queryFn: () => timetableApi.versions(timetableId) });
   const history = useQuery({ queryKey: queryKeys.history(timetableId), queryFn: () => timetableApi.history(timetableId) });
   const transition = useMutation({
@@ -57,7 +58,7 @@ export default function TimetableDetailPage() {
     {item.status === "ARCHIVED" && <div className="mb-4 rounded-xl border border-slate-200 bg-slate-100 p-4 text-sm text-slate-700">Archived timetables are read-only. Historical versions, audit history, quality, and comparisons remain available.</div>}
     {transition.isError && transition.error.message !== "Action cancelled" && <div className="mb-4"><ErrorState message={apiErrorMessage(transition.error)} /></div>}
     <div className="grid gap-5 lg:grid-cols-3">
-      <Card title="Metadata"><dl className="space-y-3 text-sm"><Metadata label="Status"><StatusBadge value={item.status} /></Metadata><Metadata label="Scope" value={item.scope_type} /><Metadata label="Academic term ID" value={item.academic_term_id} /><Metadata label="Active version" value={item.active_version_id ?? "None"} /><Metadata label="Active version lock"><StatusBadge value={activeVersion?.is_locked ? "LOCKED" : "UNLOCKED"} /></Metadata><Metadata label="Updated" value={new Date(item.updated_at).toLocaleString()} /></dl></Card>
+      <Card title="Metadata"><dl className="space-y-3 text-sm"><Metadata label="Status"><StatusBadge value={item.status} /></Metadata><Metadata label="Scheduling mode"><StatusBadge value={item.scheduling_mode ?? "WEEKLY"} /></Metadata>{item.scheduling_slot_id && <Metadata label="Scheduling Slot" value={slot.data ? `${slot.data.slot_code} · ${slot.data.slot_name}` : "Loading…"} />}<Metadata label="Scope" value={item.scope_type} /><Metadata label="Academic term ID" value={item.academic_term_id} /><Metadata label="Active version" value={item.active_version_id ?? "None"} /><Metadata label="Active version lock"><StatusBadge value={activeVersion?.is_locked ? "LOCKED" : "UNLOCKED"} /></Metadata><Metadata label="Updated" value={new Date(item.updated_at).toLocaleString()} /></dl></Card>
       <Card title="Versions" className="lg:col-span-2">{versions.isLoading ? <LoadingState /> : versions.isError ? <ErrorState message={apiErrorMessage(versions.error)} /> : versions.data?.items.length ? <div className="divide-y">{versions.data.items.map((version) => <div key={version.id} className="flex items-center justify-between gap-4 py-3"><div><p className="font-medium">Version {version.version_number} {version.version_name && `· ${version.version_name}`}</p><div className="mt-1 flex gap-2"><StatusBadge value={version.solver_status} />{version.is_active && <StatusBadge value="ACTIVE" />}{version.is_locked && <StatusBadge value="LOCKED" />}</div></div><Link className="inline-flex items-center gap-1 text-sm font-semibold text-brand-700" href={`/timetable-versions/${version.id}`}>Open <ExternalLink className="h-4 w-4" /></Link></div>)}</div> : <EmptyState title="No versions" />}</Card>
       <Card title="Status history" className="lg:col-span-3">{history.isLoading ? <LoadingState /> : history.isError ? <ErrorState message={apiErrorMessage(history.error)} /> : history.data?.length ? <ol className="relative ml-3 border-l border-slate-300 pl-7">{history.data.map((record) => <li key={record.id} className="mb-7"><span className="absolute -left-2 mt-1 h-4 w-4 rounded-full border-2 border-white bg-brand-600" /><div className="flex flex-wrap items-center gap-2"><StatusBadge value={record.from_status} /><span aria-hidden>→</span><StatusBadge value={record.to_status} /><time className="text-xs text-slate-500">{new Date(record.created_at).toLocaleString()}</time></div><p className="mt-2 text-xs text-slate-500">Performed by {record.performed_by}</p>{record.reason && <p className="mt-1 text-sm text-slate-700">{record.reason}</p>}</li>)}</ol> : <EmptyState title="No workflow transitions yet" />}</Card>
     </div>

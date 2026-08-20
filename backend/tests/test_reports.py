@@ -85,7 +85,7 @@ class AdministrativeReportTests(unittest.TestCase):
     def test_metadata_validation_and_authorization(self):
         response = self.client.get("/api/v1/reports/definitions", headers=self.context.headers["administrator"])
         self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual([item["title"] for item in response.json()], ["Faculty Master", "Course Offerings", "Theory Faculty Allocations", "Activity Faculty Allocations", "Section-wise Course & Faculty Allocation", "Faculty Workload"])
+        self.assertEqual([item["title"] for item in response.json()], ["Faculty Master", "Course Offerings", "Theory Faculty Allocations", "Activity Faculty Allocations", "Section-wise Course & Faculty Allocation", "Faculty Workload", "Semester Session Progress", "Slot Session Progress", "Slot Requirement Completeness", "Slot Faculty Workload", "Slot Timetable"])
         self.assertEqual(self.client.get("/api/v1/reports/definitions", headers=self.context.headers["coordinator"]).status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/definitions", headers=self.context.headers["hod"]).status_code, 200)
         self.assertEqual(self.client.get("/api/v1/reports/definitions", headers=self.context.headers["unauthorized"]).status_code, 403)

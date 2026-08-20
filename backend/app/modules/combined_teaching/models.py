@@ -1,9 +1,9 @@
 """Persistence for common classes shared by two or more section offerings."""
 
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -47,6 +47,7 @@ class CombinedTeachingEvent(Base):
     timetable_version_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("timetable_versions.id", ondelete="CASCADE"), nullable=False, index=True)
     combined_teaching_group_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("combined_teaching_groups.id", ondelete="RESTRICT"), nullable=False, index=True)
     working_day_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("working_days.id", ondelete="RESTRICT"), nullable=False, index=True)
+    actual_date: Mapped[date | None] = mapped_column(Date, index=True)
     period_number: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     session_length: Mapped[int] = mapped_column(Integer, nullable=False)
     faculty_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("faculty.id", ondelete="RESTRICT"), nullable=False, index=True)

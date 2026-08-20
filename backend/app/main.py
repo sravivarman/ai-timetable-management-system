@@ -31,6 +31,7 @@ from app.modules.timetables.entry_router import entry_router, version_entry_rout
 from app.modules.timetables.solver_router import solver_run_router, version_solver_router
 from app.modules.timetables.review_router import review_entry_router,review_version_router,workflow_router
 from app.modules.reports.router import router as reports_router
+from app.modules.scheduling_slots.router import router as scheduling_slots_router
 
 
 @asynccontextmanager
@@ -84,6 +85,7 @@ def create_application() -> FastAPI:
     application.include_router(facilities_constraints_router, prefix=settings.api_v1_prefix)
     application.include_router(resource_availability_router, prefix=settings.api_v1_prefix)
     application.include_router(timetable_validation_router, prefix=settings.api_v1_prefix)
+    application.include_router(scheduling_slots_router, prefix=settings.api_v1_prefix)
     application.include_router(timetables_router, prefix=settings.api_v1_prefix)
     application.include_router(version_router, prefix=settings.api_v1_prefix)
     application.include_router(version_entry_router, prefix=settings.api_v1_prefix)

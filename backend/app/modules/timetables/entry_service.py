@@ -15,6 +15,7 @@ from app.modules.faculty_allocations.eligibility import uses_activity_faculty_al
 from app.modules.resource_availability.service import availability_service
 from app.modules.laboratory_batches.models import LaboratoryBatchConfiguration,LaboratoryRotationAssignment,LaboratoryRotationBlock,StudentBatch
 from app.modules.schedule_configuration.models import PeriodTiming,WorkingDay
+from app.modules.scheduling_slots.models import SchedulingSlotWorkingDate
 from app.modules.timetables.entry_repository import entry_repository
 from app.modules.timetables.entry_schemas import TimetableEntryCreate
 from app.modules.timetables.models import Timetable,TimetableEntry,TimetableEntryAudit,TimetableVersion
@@ -38,7 +39,7 @@ class TimetableEntryService:
   return version,timetable
 
  def _validate(self,db,version_id,data,exclude_id=None):
-  _,timetable=self._version_context(db,version_id)
+  version,timetable=self._version_context(db,version_id)
   offering=db.scalar(select(CourseOffering).where(CourseOffering.id==data.course_offering_id))
   if not offering or not offering.is_active:raise HTTPException(422,"Course offering must be active")
   if offering.section_id!=data.section_id:raise HTTPException(422,"Entry section must match course offering section")
@@ -53,6 +54,13 @@ class TimetableEntryService:
   if data.period_number+data.session_length-1>7:raise HTTPException(422,"Session must not exceed period 7")
   day=db.scalar(select(WorkingDay).where(WorkingDay.id==data.working_day_id))
   if not day or not day.is_active or not day.is_working_day:raise HTTPException(422,"Working day must be active")
+  if version.scheduling_mode=="WEEKLY":
+   if data.actual_date is not None:raise HTTPException(422,"WEEKLY timetable entries must not specify actual_date")
+  else:
+   if data.actual_date is None:raise HTTPException(422,"SLOT_BASED timetable entries require actual_date")
+   slot_date=db.scalar(select(SchedulingSlotWorkingDate).where(SchedulingSlotWorkingDate.scheduling_slot_id==version.scheduling_slot_id,SchedulingSlotWorkingDate.working_date==data.actual_date,SchedulingSlotWorkingDate.is_active.is_(True)))
+   if slot_date is None:raise HTTPException(422,"Actual date must be an active Working Date in the Timetable Scheduling Slot")
+   if data.actual_date.strftime("%A")!=day.day_name:raise HTTPException(422,"Working day must match the actual date")
 
   faculty_for_constraints=data.faculty_id
   if data.laboratory_faculty_allocation_id:
@@ -100,14 +108,14 @@ class TimetableEntryService:
    constraint_faculty_ids|={UUID(str(value)) for value in rotation_assignment.supporting_faculty_ids or []}
 
   periods=range(data.period_number,data.period_number+data.session_length)
-  if data.classroom_id and any(not availability_service.is_available(db,"CLASSROOM",data.classroom_id,timetable.academic_term_id,data.working_day_id,period) for period in periods):raise HTTPException(409,"Classroom is unavailable during the requested session")
-  if laboratory and any(not availability_service.is_available(db,"LABORATORY",laboratory.id,timetable.academic_term_id,data.working_day_id,period) for period in periods):raise HTTPException(409,"Laboratory is blocked or unavailable during the requested session")
-  if any(not availability_service.is_available(db,"FACULTY",faculty_id,timetable.academic_term_id,data.working_day_id,period) for faculty_id in constraint_faculty_ids for period in periods):raise HTTPException(409,"Faculty is unavailable during the requested session")
+  if data.classroom_id and any(not availability_service.is_available(db,"CLASSROOM",data.classroom_id,timetable.academic_term_id,data.working_day_id,period,data.actual_date) for period in periods):raise HTTPException(409,"Classroom is unavailable during the requested session")
+  if laboratory and any(not availability_service.is_available(db,"LABORATORY",laboratory.id,timetable.academic_term_id,data.working_day_id,period,data.actual_date) for period in periods):raise HTTPException(409,"Laboratory is blocked or unavailable during the requested session")
+  if any(not availability_service.is_available(db,"FACULTY",faculty_id,timetable.academic_term_id,data.working_day_id,period,data.actual_date) for faculty_id in constraint_faculty_ids for period in periods):raise HTTPException(409,"Faculty is unavailable during the requested session")
 
   demand=entry_capacity_demand(db,data)
   if laboratory and laboratory.capacity is not None and demand>laboratory.capacity:raise HTTPException(409,f"{laboratory.laboratory_name} {laboratory.room_number} has capacity {laboratory.capacity}; the selected activity requires capacity for {demand} students.")
 
-  conflicts=[];overlapping=entry_repository.overlapping(db,version_id,data.working_day_id,data.period_number,data.period_number+data.session_length-1,exclude_id)
+  conflicts=[];overlapping=entry_repository.overlapping(db,version_id,data.working_day_id,data.period_number,data.period_number+data.session_length-1,exclude_id,data.actual_date)
   for existing in overlapping:
    same_combined=data.combined_teaching_event_id is not None and data.combined_teaching_event_id==existing.combined_teaching_event_id
    parallel_groups=(data.student_batch_id is not None and existing.student_batch_id is not None and existing.student_batch_id!=data.student_batch_id)
